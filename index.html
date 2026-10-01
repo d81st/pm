@@ -153,8 +153,13 @@
         .settings-links { display: flex; flex-direction: column; gap: 12px; }
         .gh-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
         .gh-connected { display: flex; flex-direction: column; gap: 14px; padding: 14px; margin-bottom: 18px;
-            background: var(--card-2); border: 1px solid var(--border); border-radius: 10px; word-break: break-all; }
+            background: var(--card-2); border: 1px solid var(--border); border-radius: 10px; }
+        #gh-connected-target { word-break: break-all; }
         .gh-login-info { margin-top: 10px; word-break: break-all; }
+        .gh-replace { margin-bottom: 0; word-break: normal; }
+        .gh-danger { display: flex; flex-wrap: wrap; gap: 10px; }
+        .gh-danger .btn-danger { flex: 1 1 200px; border-color: transparent; color: var(--muted); font-weight: 500; }
+        .gh-danger .btn-danger:hover, .gh-danger .btn-danger:focus-visible { border-color: var(--danger); color: #fca5a5; background: rgba(239,68,68,0.12); }
         @media (max-width: 640px) { .gh-grid { grid-template-columns: 1fr; } .sync-banner-actions button { flex: 1 1 140px; } }
         .fallback-banner span { flex: 1 1 260px; }
         .search-bar { margin-bottom: 22px; }
@@ -689,7 +694,18 @@
         <p class="modal-desc">Хранилище лежит в вашем приватном репозитории и сохраняется туда после каждого изменения. Каждое сохранение — коммит, поэтому любую прошлую версию можно восстановить. Если хранилище изменят на другом устройстве, страница не затрёт эти изменения молча.</p>
         <div id="gh-connected" class="gh-connected" hidden>
             <div class="gh-connected-text">Подключено: <b id="gh-connected-target"></b></div>
-            <button type="button" class="btn-danger" id="btn-gh-disconnect">Отключить на этом устройстве</button>
+            <p class="modal-note">Настройки (вместе с токеном) хранятся и внутри зашифрованного хранилища: на новом устройстве достаточно открыть файл хранилища — страница сама предложит включить синхронизацию.</p>
+            <div class="form-group gh-replace">
+                <label for="gh-new-token">Заменить токен (если истёк)</label>
+                <div class="password-row">
+                    <input type="password" id="gh-new-token" placeholder="github_pat_…" autocomplete="off" autocapitalize="off" spellcheck="false">
+                    <button type="button" class="btn-secondary" id="btn-gh-replace-token">Заменить</button>
+                </div>
+            </div>
+            <div class="gh-danger">
+                <button type="button" class="btn-danger" id="btn-gh-disconnect">Отключить на этом устройстве</button>
+                <button type="button" class="btn-danger" id="btn-gh-disconnect-all">Удалить настройки из хранилища</button>
+            </div>
         </div>
         <div id="gh-form">
             <div class="gh-grid">
@@ -716,7 +732,7 @@
                 <label for="gh-token">Токен доступа (fine-grained)</label>
                 <input type="password" id="gh-token" placeholder="github_pat_…" autocomplete="off" autocapitalize="off" spellcheck="false">
             </div>
-            <p class="modal-note">Токен нужен только с доступом к этому репозиторию и правом Contents: Read and write. Он хранится только в этом браузере, зашифрованный вашим мастер-паролем, и отправляется только на api.github.com.</p>
+            <p class="modal-note">Токен нужен только с доступом к этому репозиторию и правом Contents: Read and write. Он хранится зашифрованным мастер-паролем: в этом браузере и внутри самого хранилища (для других устройств). Отправляется только на api.github.com.</p>
         </div>
         <div class="modal-actions">
             <button type="button" class="btn-secondary" id="btn-github-close">Закрыть</button>
@@ -985,7 +1001,25 @@ function normalizeCategories(raw) {
 }
 
 /** Всё, что шифруется и записывается в хранилище */
-function vaultData() { return { entries, trash, categories }; }
+function vaultData() {
+    const d = { entries, trash, categories };
+    if (vaultSync) d.sync = vaultSync; // токен и адрес репозитория — внутри того же шифра, что и пароли
+    return d;
+}
+
+/** Настройки синхронизации из расшифрованного хранилища: строгая проверка, иначе null */
+function normalizeSync(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const s = { owner: raw.owner, repo: raw.repo, path: raw.path, branch: raw.branch, token: raw.token };
+    if (!ghValidTarget(s) || typeof s.token !== 'string' || !/^[\x21-\x7e]{20,255}$/.test(s.token)) return null;
+    return s;
+}
+function syncFromSession(sess) {
+    return { owner: sess.owner, repo: sess.repo, path: sess.path, branch: sess.branch, token: sess.token };
+}
+function sameTarget(a, b) {
+    return !!a && !!b && a.owner === b.owner && a.repo === b.repo && a.path === b.path && a.branch === b.branch;
+}
 
 function orderedCategories() {
     const other = categories.find(c => c.id === FALLBACK_CATEGORY_ID);
@@ -1013,12 +1047,13 @@ function normalizeVaultData(decrypted) {
     const clean = (arr) => arr
         .filter(e => e && typeof e === 'object' && !Array.isArray(e))
         .map(e => (typeof e.id === 'string' && e.id) ? e : { ...e, id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2) });
-    if (Array.isArray(decrypted)) return { entries: clean(decrypted), trash: [], categories: null };
+    if (Array.isArray(decrypted)) return { entries: clean(decrypted), trash: [], categories: null, sync: null };
     if (decrypted && typeof decrypted === 'object') {
         return {
             entries: Array.isArray(decrypted.entries) ? clean(decrypted.entries) : [],
             trash: Array.isArray(decrypted.trash) ? clean(decrypted.trash) : [],
-            categories: normalizeCategories(decrypted.categories)
+            categories: normalizeCategories(decrypted.categories),
+            sync: normalizeSync(decrypted.sync)
         };
     }
     throw new Error('INVALID_VAULT_STRUCTURE');
@@ -1078,6 +1113,7 @@ let catEditId = null;               // категория, редактируе�
 let catFollowType = false;          // в форме записи категория следует за выбранным типом
 let ghSession = null;               // активная синхронизация с GitHub: { owner, repo, path, branch, token, sha }
 let lastSyncError = null;           // последняя ошибка записи в GitHub (для понятных сообщений)
+let vaultSync = null;               // копия настроек GitHub ВНУТРИ зашифрованного хранилища (для новых устройств)
 const collapsedCats = new Set();    // свёрнутые категории (только на время сессии)
 const revealTimers = new Map();     // таймеры авто-скрытия показанных значений
 let editId = null;
@@ -1348,6 +1384,7 @@ function lock() {
     catEditId = null;
     catFollowType = false;
     ghSession = null;
+    vaultSync = null;
     lastSyncError = null;
     setSyncState('');
     masterKey = null;
@@ -1363,7 +1400,7 @@ function lock() {
     stopLockTimer();
     clearClipboardTimer();
     const clearIds = [
-        'entries-list', 'trash-list', 'health-body', 'cat-filter', 'details-body', 'categories-list', 'cat-name', 'f-newcat-name', 'gh-token',
+        'entries-list', 'trash-list', 'health-body', 'cat-filter', 'details-body', 'categories-list', 'cat-name', 'f-newcat-name', 'gh-token', 'gh-new-token',
         'f-title', 'f-login', 'f-password', 'f-url', 'f-notes', 'f-type',
         'cp-current', 'cp-new', 'cp-new-confirm',
         'import-password-input', 'search',
@@ -1944,7 +1981,7 @@ function ghError(code, status) { const e = new Error(code); e.code = code; e.sta
 function ghErrorText(e) {
     switch (e && e.code) {
         case 'NETWORK': return 'Нет связи с GitHub. Изменения пока только на этом устройстве.';
-        case 'AUTH': return 'Токен GitHub недействителен или истёк. Создайте новый и подключите заново.';
+        case 'AUTH': return 'Токен GitHub недействителен или истёк. Скачайте файл хранилища с github.com и откройте его: если новый токен уже сохранён в хранилище, страница предложит его. Иначе создайте новый токен.';
         case 'NO_ACCESS': return 'Нет доступа к репозиторию: проверьте имя репозитория и права токена (Contents: Read and write).';
         case 'CONFLICT': return 'Хранилище в GitHub изменено на другом устройстве — автосохранение остановлено.';
         case 'BAD_FILE': return 'Файл в репозитории не похож на хранилище паролей.';
@@ -2103,13 +2140,13 @@ function openGitHubModal() {
         document.getElementById('gh-branch').value = src.branch || 'main';
     }
     document.getElementById('gh-token').value = '';
+    document.getElementById('gh-new-token').value = '';
     openModalEl('github-modal', connected ? 'btn-github-close' : 'gh-owner');
 }
 
 function closeGitHubModal() {
     closeModalEl('github-modal');
-    const t = document.getElementById('gh-token');
-    if (t) t.value = '';
+    ['gh-token', 'gh-new-token'].forEach(id => { const t = document.getElementById(id); if (t) t.value = ''; });
 }
 
 const connectGitHub = exclusive(async function connectGitHub() {
@@ -2143,14 +2180,15 @@ const connectGitHub = exclusive(async function connectGitHub() {
             'Если хотите работать с версией из GitHub — нажмите «Отмена», заблокируйте и выберите «Открыть из GitHub».')) return;
         sess.sha = remote.sha;
     }
-    const prevSession = ghSession, prevHandle = vaultFileHandle;
+    const prevSession = ghSession, prevHandle = vaultFileHandle, prevSync = vaultSync;
     ghSession = sess;
+    vaultSync = syncFromSession(sess);
     vaultFileHandle = null;
     showBusy('Сохранение в GitHub…');
     const ok = await persist();
     hideBusy();
     if (!ok) {
-        ghSession = prevSession; vaultFileHandle = prevHandle;
+        ghSession = prevSession; vaultFileHandle = prevHandle; vaultSync = prevSync;
         setSyncState(prevSession ? 'ok' : '');
         showToast(ghErrorText(lastSyncError), true);
         return;
@@ -2163,8 +2201,8 @@ const connectGitHub = exclusive(async function connectGitHub() {
 });
 
 const disconnectGitHub = exclusive(async function disconnectGitHub() {
-    if (!confirm('Отключить GitHub на этом устройстве?\n\nТокен будет удалён из браузера. Файл в репозитории останется как есть. ' +
-        'Текущие изменения перестанут сохраняться автоматически — скачайте копию хранилища.')) return;
+    if (!confirm('Отключить GitHub на этом устройстве?\n\nТокен будет удалён из этого браузера. Копия настроек внутри хранилища останется — ' +
+        'при следующем открытии файла страница снова предложит включить синхронизацию. Текущие изменения перестанут сохраняться автоматически.')) return;
     ghClearConfig();
     ghSession = null;
     setSyncState('');
@@ -2172,6 +2210,89 @@ const disconnectGitHub = exclusive(async function disconnectGitHub() {
     document.getElementById('fallback-banner').classList.add('visible');
     closeGitHubModal();
     showToast('GitHub отключён на этом устройстве');
+});
+
+
+/** Хранилище открыто из файла, внутри есть настройки GitHub — включить синхронизацию на этом устройстве */
+const offerSyncFromVault = exclusive(async function offerSyncFromVault(sync, openedIv, openedData) {
+    if (!masterKey || ghSession) return;
+    if (!confirm(`В хранилище сохранены настройки синхронизации с GitHub:\n${ghTargetLabel(sync)}\n\nВключить синхронизацию на этом устройстве?`)) return;
+    const sess = { ...sync, sha: null };
+    const epoch = lockEpoch;
+    showBusy('Подключение к GitHub…');
+    let remote;
+    try { remote = await ghGet(sess); }
+    catch (e) { hideBusy(); showToast(ghErrorText(e), true); return; }
+    hideBusy();
+    if (epoch !== lockEpoch || !masterKey) return;
+    const sameVersion = remote && remote.json && remote.json.iv === openedIv && remote.json.data === openedData;
+    if (remote && !sameVersion) {
+        // в GitHub другая (обычно более свежая) версия — ничего не затираем, а открываем её
+        ghSession = sess;
+        await ghSaveLocal();
+        ghSession = null;
+        lock();
+        showToast('Синхронизация включена. В GitHub более свежая версия — нажмите «Открыть из GitHub».');
+        return;
+    }
+    if (remote) sess.sha = remote.sha;
+    const prevHandle = vaultFileHandle;
+    ghSession = sess;
+    vaultFileHandle = null;
+    if (!remote) { // файла в репозитории нет — создаём его из открытой версии
+        const ok = await persist();
+        if (!ok) {
+            ghSession = null; vaultFileHandle = prevHandle;
+            setSyncState('');
+            showToast(ghErrorText(lastSyncError), true);
+            return;
+        }
+    }
+    const stored = await ghSaveLocal();
+    document.getElementById('file-name-display').textContent = '☁️ ' + ghTargetLabel(sess);
+    document.getElementById('fallback-banner').classList.remove('visible');
+    setSyncState('ok');
+    showToast(stored ? 'Синхронизация с GitHub включена на этом устройстве' : 'Подключено до закрытия вкладки: браузер не сохранил настройки', !stored);
+});
+
+/** Заменить токен (например, истёк): проверка доступа → сохранение в хранилище и в этом браузере */
+const replaceGhToken = exclusive(async function replaceGhToken() {
+    if (!ghSession || !masterKey) return;
+    const el = document.getElementById('gh-new-token');
+    const token = el.value.trim();
+    if (!/^[\x21-\x7e]{20,255}$/.test(token)) { showToast('Вставьте новый токен целиком', true); return; }
+    const test = { ...ghSession, token };
+    showBusy('Проверка токена…');
+    try {
+        const info = await ghCheckRepo(test);
+        if (!info.isPrivate) { hideBusy(); showToast('Репозиторий стал публичным — сохранение запрещено', true); return; }
+    } catch (e) { hideBusy(); showToast(ghErrorText(e), true); return; }
+    const prevToken = ghSession.token, prevSync = vaultSync;
+    ghSession.token = token;
+    vaultSync = syncFromSession(ghSession);
+    const ok = await persist();
+    hideBusy();
+    if (!ok) { ghSession.token = prevToken; vaultSync = prevSync; showToast(ghErrorText(lastSyncError), true); return; }
+    await ghSaveLocal();
+    el.value = '';
+    showToast('Токен заменён — другие устройства получат его при открытии файла');
+});
+
+/** Удалить настройки GitHub и из хранилища, и из этого браузера */
+const disconnectGitHubEverywhere = exclusive(async function disconnectGitHubEverywhere() {
+    if (!ghSession || !masterKey) return;
+    if (!confirm('Удалить настройки GitHub из хранилища и отключить синхронизацию здесь?\n\nНа других устройствах, где синхронизация уже включена, она продолжит работать, пока вы не отзовёте токен на github.com (Settings → Developer settings → Personal access tokens).')) return;
+    const prevSync = vaultSync;
+    vaultSync = null;
+    const ok = await persist(); // последний коммит — уже без токена внутри
+    if (!ok) { vaultSync = prevSync; showToast(ghErrorText(lastSyncError), true); return; }
+    ghClearConfig();
+    ghSession = null;
+    setSyncState('');
+    document.getElementById('file-name-display').textContent = 'открыт локально';
+    document.getElementById('fallback-banner').classList.add('visible');
+    closeGitHubModal();
+    showToast('Настройки GitHub удалены. Не забудьте отозвать токен на github.com');
 });
 
 /** Конфликт: перезаписать GitHub версией с этого устройства (чужая версия остаётся в истории коммитов) */
@@ -2568,6 +2689,9 @@ document.getElementById('btn-open-github').addEventListener('click', openFromGit
 document.getElementById('btn-github').addEventListener('click', openGitHubModal);
 document.getElementById('btn-gh-connect').addEventListener('click', connectGitHub);
 document.getElementById('btn-gh-disconnect').addEventListener('click', disconnectGitHub);
+document.getElementById('btn-gh-disconnect-all').addEventListener('click', disconnectGitHubEverywhere);
+document.getElementById('btn-gh-replace-token').addEventListener('click', replaceGhToken);
+document.getElementById('gh-new-token').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); replaceGhToken(); } });
 document.getElementById('btn-github-close').addEventListener('click', closeGitHubModal);
 document.getElementById('gh-token').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); connectGitHub(); } });
 document.getElementById('sync-status').addEventListener('click', () => { if (ghSession) persist().then(ok => notifySaved(ok, 'Сохранено в GitHub')); });
@@ -3235,11 +3359,21 @@ const confirmImportPassword = exclusive(async function confirmImportPassword() {
             categories = imported.categories || defaultCategories();
             vaultDirty = false;
             ghSession = ghRemote ? ghRemote.session : null;
+            vaultSync = imported.sync || null;
+            // открыли из GitHub, а в самом хранилище настроек ещё нет — дописываем их (один коммит)
+            const needSyncCopy = !!ghSession && !sameTarget(vaultSync, ghSession);
+            if (needSyncCopy) vaultSync = syncFromSession(ghSession);
             document.getElementById('file-name-display').textContent = ghSession ? '☁️ ' + ghTargetLabel(ghSession) :
                 (vaultFileHandle ? vaultFileHandle.name : (fallbackMode ? 'открыт через файл' : ''));
             closeImportPasswordModal();
             showApp();
             if (ghSession) await ghSaveLocal(); // обновить зашифрованный токен, если соль/пароль сменились
+            if (needSyncCopy && !isLegacy) persist();
+            // открыли файл вручную, а внутри есть настройки GitHub — предлагаем включить синхронизацию на этом устройстве
+            if (!ghSession && vaultSync) {
+                const sync = vaultSync, iv = payload.iv, data = payload.data;
+                setTimeout(() => offerSyncFromVault(sync, iv, data), 0);
+            }
             if (isLegacy) {
                 const ok = await persist(); // записываем уже в Argon2id
                 hideBusy();
