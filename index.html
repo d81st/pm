@@ -1,0 +1,3492 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- CSP: инлайн-скрипт/стили, HIBP, wasm-unsafe-eval для Argon2 WASM из base64 -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'unsafe-inline'; connect-src https://api.pwnedpasswords.com https://api.github.com; img-src data:; form-action 'none'; base-uri 'none'">
+    <title>Менеджер паролей</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card: #1e293b;
+            --card-2: #162033;
+            --border: #334155;
+            --text: #e2e8f0;
+            --muted: #94a3b8;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --danger: #ef4444;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --radius: 12px;
+            --field-h: 48px;   /* высота инпутов и основных кнопок */
+            --tap-h: 44px;     /* минимальная зона нажатия */
+            --gap: 16px;
+            color-scheme: dark;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html { -webkit-text-size-adjust: 100%; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+        .container { max-width: 1120px; margin: 0 auto; padding: 28px 24px 40px; }
+
+        /* ---------- Кнопки ---------- */
+        button, .btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+            min-height: var(--field-h); padding: 0 22px; border: none; border-radius: 10px;
+            font: inherit; font-size: 0.95rem; font-weight: 600; line-height: 1.2;
+            cursor: pointer; white-space: nowrap;
+            transition: background 0.15s, border-color 0.15s, transform 0.1s;
+        }
+        [hidden] { display: none !important; }
+        button:active:not(:disabled) { transform: scale(0.98); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        button:focus-visible, select:focus-visible, summary:focus-visible {
+            outline: 2px solid var(--accent); outline-offset: 2px;
+        }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+        .btn-secondary { background: var(--card); color: var(--text); border: 1px solid var(--border); }
+        .btn-secondary:hover:not(:disabled) { background: var(--border); }
+        .btn-danger {
+            background: transparent; color: var(--danger); border: 1px solid var(--danger);
+            min-height: 40px; padding: 0 16px; font-size: 0.85rem;
+        }
+        .btn-danger:hover:not(:disabled) { background: var(--danger); color: #fff; }
+        .btn-small { min-height: 40px; padding: 0 16px; font-size: 0.85rem; }
+        .btn-full { width: 100%; }
+
+        /* ---------- Поля ввода ---------- */
+        input[type="text"], input[type="password"], input[type="number"], textarea, select {
+            font: inherit; font-size: 1rem; color: var(--text); background: var(--bg);
+            border: 1px solid var(--border); border-radius: 10px;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        input[type="text"], input[type="password"], input[type="number"], select {
+            width: 100%; min-height: var(--field-h); padding: 0 16px;
+        }
+        select { cursor: pointer; padding-right: 12px; }
+        textarea { width: 100%; padding: 12px 16px; resize: vertical; min-height: 110px; line-height: 1.5; }
+        input::placeholder, textarea::placeholder { color: #64748b; }
+        input:focus, textarea:focus, select:focus {
+            outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,0.25);
+        }
+
+        /* ---------- Экран входа ---------- */
+        #login-screen {
+            display: flex; flex-direction: column; align-items: center;
+            justify-content: center; min-height: 100vh; padding: 32px 20px;
+        }
+        #login-screen h1 { font-size: 1.9rem; margin-bottom: 10px; text-align: center; }
+        #login-screen .subtitle {
+            color: var(--muted); margin-bottom: 28px; text-align: center;
+            max-width: 460px; font-size: 0.95rem;
+        }
+        .login-box {
+            background: var(--card); border: 1px solid var(--border);
+            border-radius: 16px; padding: 32px; width: 100%; max-width: 480px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+        }
+        .login-box label { display: block; font-size: 0.9rem; color: var(--muted); margin-bottom: 8px; }
+        #new-vault-block { display: flex; flex-direction: column; }
+        #new-vault-block input { margin-bottom: 12px; }
+        .strength-bar { height: 6px; background: var(--border); border-radius: 3px; margin-bottom: 8px; overflow: hidden; }
+        .strength-bar-fill { height: 100%; width: 0%; transition: width 0.3s, background 0.3s; }
+        .strength-text { font-size: 0.8rem; color: var(--muted); margin-bottom: 18px; min-height: 1.3em; }
+        .btn-group { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+        .login-hint { font-size: 0.8rem; color: var(--muted); margin-top: 20px; text-align: center; line-height: 1.6; }
+
+        /* ---------- Шапка приложения ---------- */
+        #app { display: none; }
+        .warning {
+            background: #3a1f06; border: 1px solid rgba(245,158,11,0.55); color: #fde68a;
+            border-radius: var(--radius); font-size: 0.85rem; margin-bottom: 20px;
+        }
+        .warning summary {
+            list-style: none; cursor: pointer; padding: 12px 16px; font-weight: 600;
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+            min-height: var(--tap-h); border-radius: var(--radius);
+        }
+        .warning summary::-webkit-details-marker { display: none; }
+        .warning summary::after { content: 'Свернуть'; font-weight: 500; font-size: 0.8rem; opacity: 0.75; }
+        .warning:not([open]) summary::after { content: 'Развернуть'; }
+        .warning-body { padding: 0 16px 14px; display: flex; flex-direction: column; gap: 6px; line-height: 1.55; }
+        .app-header {
+            display: flex; justify-content: space-between; align-items: flex-end;
+            gap: 16px 24px; flex-wrap: wrap; margin-bottom: 18px;
+        }
+        .app-title { min-width: 0; }
+        .app-title h1 { font-size: 1.7rem; line-height: 1.2; }
+        .status-bar {
+            display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px;
+            font-size: 0.85rem; color: var(--muted); margin-top: 6px;
+        }
+        .status-bar .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; }
+        .lock-timer { color: var(--warning); }
+        .app-primary { display: flex; gap: 12px; flex-wrap: wrap; }
+        .toolbar {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 10px; margin-bottom: 18px;
+        }
+        .toolbar .btn-secondary { min-height: var(--tap-h); padding: 0 14px; font-weight: 500; }
+        .fallback-banner {
+            display: none; background: #1e3a5f; border: 1px solid var(--accent);
+            color: #bfdbfe; padding: 14px 16px; border-radius: var(--radius); font-size: 0.9rem;
+            margin-bottom: 18px; align-items: center; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap;
+        }
+        .fallback-banner.visible { display: flex; }
+        .sync-banner { background: #3a1f06; border-color: var(--warning); color: #fde68a; }
+        .sync-banner-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+        .sync-status {
+            min-height: 30px; padding: 0 10px; font-size: 0.82rem; font-weight: 500; border-radius: 999px;
+            background: transparent; color: var(--muted); border: 1px solid var(--border);
+        }
+        .sync-status:disabled { opacity: 1; cursor: default; }
+        .sync-status[data-state="ok"] { color: #86efac; border-color: rgba(34,197,94,0.35); }
+        .sync-status[data-state="error"], .sync-status[data-state="conflict"] { color: #fde68a; border-color: var(--warning); }
+        .settings-links { display: flex; flex-direction: column; gap: 12px; }
+        .gh-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+        .gh-connected { display: flex; flex-direction: column; gap: 14px; padding: 14px; margin-bottom: 18px;
+            background: var(--card-2); border: 1px solid var(--border); border-radius: 10px; word-break: break-all; }
+        .gh-login-info { margin-top: 10px; word-break: break-all; }
+        @media (max-width: 640px) { .gh-grid { grid-template-columns: 1fr; } .sync-banner-actions button { flex: 1 1 140px; } }
+        .fallback-banner span { flex: 1 1 260px; }
+        .search-bar { margin-bottom: 22px; }
+        .search-bar input { min-height: 52px; padding: 0 18px; background: var(--card); }
+
+        /* ---------- Записи ---------- */
+        .entries { display: flex; flex-direction: column; gap: 14px; }
+        #entries-list.entries { gap: 0; }
+
+        /* категории и колонки */
+        .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 24px; }
+        .chips:empty { display: none; }
+        .chip {
+            min-height: 40px; padding: 0 16px; border-radius: 999px; font-size: 0.88rem; font-weight: 500;
+            background: var(--card); color: var(--muted); border: 1px solid var(--border);
+        }
+        .chip:hover { background: var(--border); color: var(--text); }
+        .chip[aria-pressed="true"] { background: rgba(59,130,246,0.18); border-color: var(--accent); color: #bfdbfe; }
+        .chip .n { opacity: 0.75; font-weight: 600; }
+        .chip.chip-add { background: transparent; border-style: dashed; color: #93c5fd; }
+        .chip.chip-add:hover { background: rgba(59,130,246,0.15); color: #bfdbfe; }
+        .cat-empty {
+            grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: 12px;
+            padding: 24px 20px; color: var(--muted); text-align: center;
+            border: 1px dashed var(--border); border-radius: var(--radius);
+        }
+        .cat-form, .newcat-panel { display: flex; gap: 10px; }
+        .cat-form select, .newcat-panel select { flex: 0 0 84px; width: 84px; padding: 0 8px; text-align: center; }
+        .cat-form input, .newcat-panel input { flex: 1 1 auto; min-width: 0; }
+        .cat-form-actions { display: flex; gap: 10px; margin-top: 12px; }
+        .cat-form-actions button { flex: 1 1 0; }
+        .newcat-panel {
+            margin-top: 12px; padding: 12px;
+            background: var(--card-2); border: 1px dashed var(--border); border-radius: 10px;
+        }
+        .cat-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 12px 0; border-top: 1px solid rgba(51,65,85,0.6); }
+        .cat-row-icon { font-size: 1.3rem; width: 32px; text-align: center; flex: 0 0 32px; }
+        .cat-row-info { flex: 1 1 160px; min-width: 0; display: flex; flex-direction: column; }
+        .cat-row-name { font-weight: 600; word-break: break-word; }
+        .cat-row-count { color: var(--muted); font-size: 0.82rem; }
+        .cat-row-actions { display: flex; gap: 8px; }
+        .cat-row-actions .btn-danger { border-color: transparent; color: var(--muted); font-weight: 500; }
+        .cat-row-actions .btn-danger:hover, .cat-row-actions .btn-danger:focus-visible { border-color: var(--danger); color: #fca5a5; background: rgba(239,68,68,0.12); }
+        .cat { margin-bottom: 30px; }
+        .cat-head {
+            width: 100%; justify-content: flex-start; gap: 10px; min-height: var(--tap-h);
+            padding: 0 6px; margin-bottom: 12px; background: transparent; color: var(--text);
+            font-size: 1.05rem; border-radius: 10px;
+        }
+        .cat-head:hover { background: rgba(51,65,85,0.35); }
+        .cat-head .cat-name { font-weight: 700; }
+        .cat-head .cat-count {
+            color: var(--muted); font-weight: 500; font-size: 0.8rem; background: var(--card);
+            border: 1px solid var(--border); border-radius: 999px; padding: 1px 10px;
+        }
+        .cat-head .chev { margin-left: auto; color: var(--muted); transition: transform 0.15s; }
+        .cat-head[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+        .cat-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+            gap: 16px; align-items: stretch; /* карточки одного ряда одинаковой высоты */
+        }
+        .cat-grid[hidden] { display: none; }
+        .cat-grid > .entry { display: flex; flex-direction: column; }
+        .entry-foot { margin-top: auto; padding-top: 12px; }
+        .entry-more {
+            width: 100%; justify-content: flex-start; gap: 10px; min-height: var(--tap-h); padding: 0 14px;
+            background: rgba(51,65,85,0.3); color: var(--muted); border: 1px solid transparent;
+            font-size: 0.9rem; font-weight: 500; border-radius: 10px;
+        }
+        .entry-more:hover { background: var(--border); color: var(--text); }
+        .entry-more .hints { margin-left: auto; display: flex; gap: 6px; font-size: 0.95rem; }
+        .entry-more .arrow { font-size: 1.2rem; line-height: 1; }
+        .entry-field .value.muted { color: #64748b; }
+        .entry-field .value { min-height: 36px; display: flex; align-items: center; } /* одинаковая высота строк с кнопками и без */
+        .detail-row {
+            display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+            padding: 14px 0; border-top: 1px solid rgba(51,65,85,0.6);
+        }
+        .detail-row:first-child { border-top: none; padding-top: 0; }
+        .detail-label { flex: 1 0 100%; color: var(--muted); font-size: 0.8rem; }
+        .detail-value { flex: 1 1 0; min-width: 0; line-height: 1.6; word-break: break-word; white-space: pre-wrap; }
+        .detail-value a { color: var(--accent); }
+        .detail-empty { color: var(--muted); font-size: 0.92rem; padding: 14px 0; border-top: 1px solid rgba(51,65,85,0.6); }
+
+        /* меню карточки «⋮» */
+        .entry-menu { position: relative; flex-shrink: 0; }
+        .menu-btn {
+            width: 40px; min-width: 40px; min-height: 40px; padding: 0; font-size: 1.35rem; line-height: 1;
+            background: transparent; color: var(--muted); border: 1px solid transparent; border-radius: 10px;
+        }
+        .menu-btn:hover, .entry-menu.open .menu-btn { background: var(--border); color: var(--text); }
+        .menu-list {
+            position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; min-width: 210px; padding: 6px;
+            display: flex; flex-direction: column; gap: 2px; background: var(--card);
+            border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+        }
+        .menu-list[hidden] { display: none; }
+        .entry-menu.up .menu-list { top: auto; bottom: calc(100% + 6px); }
+        .menu-item {
+            width: 100%; justify-content: flex-start; min-height: var(--tap-h); padding: 0 12px;
+            background: transparent; color: var(--text); font-size: 0.92rem; font-weight: 500; border-radius: 8px;
+        }
+        .menu-item:hover, .menu-item:focus-visible { background: var(--border); }
+        .menu-item.danger { color: #fca5a5; }
+        .menu-item.danger:hover, .menu-item.danger:focus-visible { background: rgba(239,68,68,0.18); }
+        .menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+        .entry {
+            background: var(--card); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 18px 20px; transition: border-color 0.15s;
+        }
+        .entry:hover { border-color: rgba(59,130,246,0.6); }
+        .entry-header {
+            display: flex; justify-content: space-between; align-items: flex-start;
+            margin-bottom: 12px; gap: 12px;
+        }
+        .entry-title {
+            font-weight: 600; font-size: 1.1rem; display: flex; align-items: center;
+            gap: 8px 10px; flex-wrap: wrap; flex: 1 1 0; min-width: 0; word-break: break-word; padding-top: 6px;
+        }
+        .type-badge {
+            display: inline-block; font-size: 0.72rem; font-weight: 600;
+            padding: 3px 10px; border-radius: 999px; letter-spacing: 0.02em;
+            background: var(--border); color: var(--muted); white-space: nowrap;
+        }
+        .type-badge.type-password { background: #1e3a5f; color: #93c5fd; }
+        .type-badge.type-api { background: #312e81; color: #c4b5fd; }
+        .type-badge.type-ssh { background: #14532d; color: #86efac; }
+        .type-badge.type-token { background: #713f12; color: #fde68a; }
+        .type-badge.type-db { background: #4a044e; color: #f0abfc; }
+        .type-badge.type-wifi { background: #164e63; color: #67e8f9; }
+        .type-badge.type-other { background: var(--border); color: var(--muted); }
+        .entry-actions { display: flex; gap: 10px; flex-shrink: 0; }
+        .entry-field {
+            display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap;
+            padding: 10px 0; font-size: 0.92rem; border-top: 1px solid rgba(51,65,85,0.6);
+        }
+        .entry-header + .entry-field { border-top: none; padding-top: 0; }
+        .entry-field .label { color: var(--muted); flex: 1 0 100%; font-size: 0.78rem; letter-spacing: 0.02em; }
+        .entry-field .value {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            word-break: break-all; flex: 1 1 0; min-width: 0;
+        }
+        .password-hidden { letter-spacing: 2px; }
+        .copy-btn {
+            background: transparent; border: 1px solid var(--border); color: var(--muted);
+            min-height: 36px; padding: 0 14px; font-size: 0.82rem; font-weight: 500; border-radius: 8px;
+        }
+        .copy-btn:hover { background: var(--border); color: var(--text); }
+        .copy-btn[data-action^="toggle"] { min-width: 92px; }
+        .notes {
+            margin-top: 10px; padding-top: 12px; border-top: 1px solid var(--border);
+            color: var(--muted); font-size: 0.88rem; white-space: pre-wrap; word-break: break-word;
+        }
+        .empty { text-align: center; padding: 64px 20px; color: var(--muted); }
+        .empty p { margin-bottom: 20px; font-size: 1.05rem; }
+        footer {
+            margin-top: 44px; text-align: center; color: var(--muted); font-size: 0.8rem; line-height: 1.8;
+        }
+
+        /* ---------- Модальные окна ---------- */
+        .modal-overlay {
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.72);
+            z-index: 100; align-items: center; justify-content: center; padding: 20px;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+            padding: 28px 28px 0; width: 100%; max-width: 560px; max-height: calc(100vh - 40px);
+            max-height: calc(100dvh - 40px); overflow-y: auto; box-shadow: 0 20px 50px rgba(0,0,0,0.4);
+        }
+        .modal.modal-wide { max-width: 640px; }
+        .modal h2 { margin-bottom: 20px; font-size: 1.3rem; line-height: 1.3; }
+        .modal-desc { color: var(--muted); font-size: 0.9rem; margin: -6px 0 20px; line-height: 1.55; }
+        .form-group { margin-bottom: 20px; }
+        .form-group label { display: block; font-size: 0.9rem; color: var(--muted); margin-bottom: 8px; }
+        .password-row { display: flex; gap: 10px; align-items: stretch; }
+        .password-row input { flex: 1 1 auto; min-width: 0; }
+        .password-row button { flex: 0 0 auto; min-width: 116px; }
+        .gen-panel {
+            display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px;
+            margin-top: 12px; padding: 12px 14px; background: var(--card-2);
+            border: 1px dashed var(--border); border-radius: 10px;
+        }
+        .gen-panel .gen-opts { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 0; font-size: 0.9rem; color: var(--muted); }
+        .gen-opts label { display: inline-flex; align-items: center; gap: 8px; margin: 0; cursor: pointer; }
+        .gen-opts input[type="number"] { width: 72px; min-height: 40px; padding: 0 10px; text-align: center; }
+        .gen-opts input[type="checkbox"], .checkbox-label input { width: 20px; height: 20px; min-height: 0; margin: 0; accent-color: var(--accent); }
+        .checkbox-label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.9rem; color: var(--muted); }
+        .section-divider { border-top: 1px solid var(--border); margin: 8px 0 20px; padding-top: 20px; }
+        .modal-actions {
+            display: flex; gap: 12px; justify-content: flex-end; align-items: center; flex-wrap: wrap;
+            position: sticky; bottom: 0; background: var(--card);
+            margin: 8px -28px 0; padding: 16px 28px 24px; border-top: 1px solid var(--border);
+        }
+        .modal-actions button { min-width: 128px; }
+        .modal-actions.split { justify-content: space-between; }
+        .modal-actions.split .btn-danger, .modal-actions.split .btn-small { min-width: 0; }
+        .modal-note { font-size: 0.9rem; color: var(--muted); }
+
+        /* ---------- Тост, занятость ---------- */
+        .toast {
+            position: fixed; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: var(--success); color: white; padding: 14px 24px;
+            border-radius: 10px; font-weight: 500; opacity: 0; pointer-events: none;
+            transition: transform 0.3s, opacity 0.3s; z-index: 200;
+            max-width: calc(100% - 32px); text-align: center; box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+        }
+        .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+        .toast.error { background: var(--danger); }
+        .busy-overlay {
+            display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.75);
+            z-index: 300; align-items: center; justify-content: center; flex-direction: column; gap: 14px; padding: 20px; text-align: center;
+        }
+        .busy-overlay.active { display: flex; }
+        .busy-overlay p { color: var(--text); font-size: 0.95rem; }
+        .spinner {
+            width: 40px; height: 40px; border: 3px solid var(--border);
+            border-top-color: var(--accent); border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation-duration: 2s !important; } }
+
+        /* ---------- Тач-экраны ---------- */
+        @media (pointer: coarse) {
+            .btn-small, .btn-danger { min-height: var(--tap-h); }
+            .copy-btn { min-height: 40px; }
+        }
+
+        /* ---------- Узкие экраны: телефон ---------- */
+        @media (max-width: 640px) {
+            .container { padding: 16px 16px 32px; }
+            .login-box { padding: 24px 20px; }
+            .app-title h1 { font-size: 1.45rem; }
+            .app-primary { width: 100%; }
+            .app-primary button { flex: 1 1 0; }
+            .toolbar { grid-template-columns: repeat(2, 1fr); }
+            .entry { padding: 16px; }
+            .entry-actions { width: 100%; }
+            .entry-actions button { flex: 1 1 0; }
+            .chips { flex-wrap: nowrap; overflow-x: auto; margin: 0 -16px 22px; padding: 0 16px 6px; scrollbar-width: none; }
+            .chips::-webkit-scrollbar { display: none; }
+            .chip { flex: 0 0 auto; }
+            .menu-list { min-width: 230px; }
+            .modal-overlay { align-items: flex-end; padding: 0; }
+            .modal {
+                max-width: none; border-radius: 18px 18px 0 0; max-height: 92vh; max-height: 92dvh;
+                padding: 22px 20px 0; border-bottom: none;
+            }
+            .modal-actions {
+                margin: 8px -20px 0; padding: 14px 20px calc(18px + env(safe-area-inset-bottom, 0px));
+                gap: 10px;
+            }
+            .modal-actions button { flex: 1 1 140px; min-width: 0; white-space: normal; }
+            .modal-actions.split { justify-content: stretch; }
+            #hibp-btn { flex: 1 1 100%; }
+            .password-row button { min-width: 96px; padding: 0 14px; }
+            .gen-panel { flex-direction: column; align-items: stretch; }
+            .gen-panel button { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="login-screen">
+    <h1>Менеджер паролей</h1>
+    <p class="subtitle">Данные шифруются AES-256-GCM + Argon2id. Хранилище — зашифрованный файл на вашем диске.</p>
+    <div class="login-box">
+        <div id="new-vault-block" style="display:none;">
+            <label for="master-password">Создайте мастер-пароль</label>
+            <input type="password" id="master-password" placeholder="Мастер-пароль" autocomplete="off" spellcheck="false">
+            <div class="strength-bar"><div class="strength-bar-fill" id="strength-fill"></div></div>
+            <div class="strength-text" id="strength-text"></div>
+            <label for="master-password-confirm">Повторите мастер-пароль</label>
+            <input type="password" id="master-password-confirm" placeholder="Повторите" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="btn-group">
+            <button type="button" class="btn-primary btn-full" id="btn-open-github" hidden>☁️ Открыть из GitHub</button>
+            <button type="button" class="btn-primary btn-full" id="btn-open-file">Открыть файл хранилища</button>
+            <button type="button" class="btn-secondary btn-full" id="btn-new-vault">Создать новое хранилище</button>
+            <button type="button" class="btn-secondary btn-full" id="btn-create-vault" style="display:none;">Создать и сохранить</button>
+        </div>
+        <p id="gh-login-info" class="login-hint gh-login-info" hidden></p>
+        <input type="file" id="fallback-open-input" accept=".json,application/json" style="display:none">
+        <p id="login-hint" class="login-hint">Нужен Chrome или Edge для автосохранения. В Firefox/Safari — открытие через выбор файла и ручное скачивание после изменений.</p>
+    </div>
+</div>
+
+<div id="app" class="container">
+    <details class="warning" open>
+        <summary>⚠️ Важно о безопасности</summary>
+        <div class="warning-body">
+            <span>Данные хранятся только в зашифрованном файле на вашем диске. Делайте резервные копии через «Экспорт».</span>
+            <span>Это не замена KeePassXC. Не используйте для банковских аккаунтов.</span>
+            <span>Если кто-то подменит сам HTML-файл, введённый пароль может быть украден. Храните свою копию страницы отдельно и не открывайте её из чужих источников.</span>
+        </div>
+    </details>
+    <div class="fallback-banner sync-banner" id="sync-banner" role="alert">
+        <span>Хранилище в GitHub изменили на другом устройстве. Автосохранение остановлено, чтобы не затереть чужие изменения.</span>
+        <div class="sync-banner-actions">
+            <button type="button" class="btn-secondary btn-small" id="btn-sync-download">Скачать мою копию</button>
+            <button type="button" class="btn-secondary btn-small" id="btn-sync-lock">Открыть свежую</button>
+            <button type="button" class="btn-secondary btn-small" id="btn-sync-overwrite">Перезаписать моей</button>
+        </div>
+    </div>
+    <div class="fallback-banner" id="fallback-banner">
+        <span>Автосохранение недоступно. После изменений скачайте обновлённый файл хранилища.</span>
+        <button type="button" class="btn-primary btn-small" id="btn-download-vault">Скачать хранилище</button>
+    </div>
+    <header class="app-header">
+        <div class="app-title">
+            <h1>Мои пароли</h1>
+            <div class="status-bar">
+                <span id="entry-count">0 записей</span>
+                <span class="meta">
+                    <span id="file-name-display"></span>
+                    <span class="lock-timer" id="lock-timer"></span>
+                    <button type="button" class="sync-status" id="sync-status" hidden></button>
+                </span>
+            </div>
+        </div>
+        <div class="app-primary">
+            <button type="button" class="btn-secondary" id="btn-lock">🔒 Заблокировать</button>
+            <button type="button" class="btn-primary" id="btn-add">+ Добавить</button>
+        </div>
+    </header>
+    <nav class="toolbar" aria-label="Инструменты">
+        <button type="button" class="btn-secondary" id="btn-health" aria-label="Отчёт о безопасности">🛡️ Отчёт</button>
+        <button type="button" class="btn-secondary" id="trash-btn" aria-label="Корзина">🗑️ Корзина</button>
+        <button type="button" class="btn-secondary" id="btn-import">Импорт</button>
+        <input type="file" id="import-file" accept=".json" style="display:none">
+        <button type="button" class="btn-secondary" id="btn-export">Экспорт</button>
+        <button type="button" class="btn-secondary" id="btn-categories">🗂️ Категории</button>
+        <button type="button" class="btn-secondary" id="btn-settings">⚙️ Настройки</button>
+    </nav>
+    <div class="search-bar">
+        <input type="text" id="search" placeholder="Поиск по названию, логину, заметкам…" autocomplete="off" aria-label="Поиск">
+    </div>
+    <div id="cat-filter" class="chips" role="toolbar" aria-label="Фильтр по категориям"></div>
+    <div id="entries-list" class="entries"></div>
+    <footer>
+        Шифрование: AES-256-GCM + Argon2id (по умолчанию m=64 MiB, t=3, p=1)<br>
+        Формат файла: version 3 (параметры KDF в заголовке, защищены AAD)<br>
+        Старые файлы PBKDF2 (v1/v2) открываются и при сохранении мигрируют на Argon2id
+    </footer>
+</div>
+
+<div class="modal-overlay" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal">
+        <h2 id="modal-title">Добавить запись</h2>
+        <div class="form-group">
+            <label for="f-type">Тип записи</label>
+            <select id="f-type">
+                <option value="password">Пароль сайта / приложения</option>
+                <option value="api">API-ключ (сервис, ИИ-агент…)</option>
+                <option value="ssh">SSH (логин + пароль / passphrase)</option>
+                <option value="token">Токен (OAuth, Bearer, PAT…)</option>
+                <option value="db">База данных</option>
+                <option value="wifi">Wi-Fi</option>
+                <option value="other">Другое</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="f-category">Категория</label>
+            <select id="f-category"></select>
+            <div class="newcat-panel" id="f-newcat-block" hidden>
+                <select id="f-newcat-icon" aria-label="Значок новой категории"></select>
+                <input type="text" id="f-newcat-name" maxlength="40" placeholder="Название категории" autocomplete="off" aria-label="Название новой категории">
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="f-title" id="label-title">Название *</label>
+            <input type="text" id="f-title" placeholder="Google, OpenAI, VPS-prod…" autocomplete="off">
+        </div>
+        <div class="form-group">
+            <label for="f-login" id="label-login">Логин / Email</label>
+            <input type="text" id="f-login" placeholder="user@example.com" autocomplete="off">
+        </div>
+        <div class="form-group">
+            <label for="f-password" id="label-password">Пароль / Секрет</label>
+            <div class="password-row">
+                <input type="password" id="f-password" placeholder="Пароль или ключ" autocomplete="off">
+                <button type="button" class="btn-secondary" id="btn-toggle-f-password" aria-label="Показать или скрыть секрет">Показать</button>
+            </div>
+            <div class="gen-panel">
+                <button type="button" class="btn-secondary btn-small" id="btn-generate-password">🎲 Сгенерировать</button>
+                <div class="gen-opts">
+                    <label>Длина <input type="number" id="gen-length" min="12" max="64" value="20"></label>
+                    <label class="checkbox-label"><input type="checkbox" id="gen-no-special"> без спецсимволов</label>
+                </div>
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="f-url" id="label-url">URL / Хост</label>
+            <input type="text" id="f-url" placeholder="https://… или host:port" autocomplete="off">
+        </div>
+        <div class="form-group">
+            <label for="f-notes" id="label-notes">Заметки</label>
+            <textarea id="f-notes" placeholder="Дополнительная информация…"></textarea>
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn-secondary" id="btn-modal-cancel">Отмена</button>
+            <button type="button" class="btn-primary" id="btn-modal-save">Сохранить</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="modal">
+        <h2 id="settings-title">Настройки</h2>
+        <div class="form-group">
+            <label for="lock-timeout">Автоблокировка</label>
+            <select id="lock-timeout">
+                <option value="1">1 минута</option>
+                <option value="3">3 минуты</option>
+                <option value="5" selected>5 минут</option>
+                <option value="10">10 минут</option>
+                <option value="15">15 минут</option>
+                <option value="30">30 минут</option>
+                <option value="0">Отключена</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="clipboard-timeout">Очистка буфера обмена</label>
+            <select id="clipboard-timeout">
+                <option value="15">15 секунд</option>
+                <option value="30" selected>30 секунд</option>
+                <option value="60">60 секунд</option>
+                <option value="0">Не очищать</option>
+            </select>
+        </div>
+        <div class="section-divider">
+            <div class="settings-links">
+                <button type="button" class="btn-secondary btn-full" id="btn-github">☁️ Синхронизация с GitHub</button>
+                <button type="button" class="btn-secondary btn-full" id="btn-change-password">🔑 Сменить мастер-пароль</button>
+            </div>
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn-secondary" id="btn-settings-close">Закрыть</button>
+            <button type="button" class="btn-primary" id="btn-settings-save">Сохранить</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="change-password-modal" role="dialog" aria-modal="true" aria-labelledby="cp-title">
+    <div class="modal">
+        <h2 id="cp-title">Смена мастер-пароля</h2>
+        <div class="form-group">
+            <label for="cp-current">Текущий мастер-пароль</label>
+            <input type="password" id="cp-current" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="form-group">
+            <label for="cp-new">Новый мастер-пароль</label>
+            <input type="password" id="cp-new" autocomplete="off" spellcheck="false">
+            <div class="strength-bar"><div class="strength-bar-fill" id="cp-strength-fill"></div></div>
+            <div class="strength-text" id="cp-strength-text"></div>
+        </div>
+        <div class="form-group">
+            <label for="cp-new-confirm">Повторите новый пароль</label>
+            <input type="password" id="cp-new-confirm" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn-secondary" id="btn-cp-cancel">Отмена</button>
+            <button type="button" class="btn-primary" id="btn-cp-save">Сменить</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="import-password-modal" role="dialog" aria-modal="true" aria-labelledby="import-modal-title">
+    <div class="modal">
+        <h2 id="import-modal-title">Пароль для файла</h2>
+        <p class="modal-desc" id="import-modal-desc">Введите мастер-пароль, которым был зашифрован этот файл.</p>
+        <div class="form-group">
+            <label for="import-password-input">Мастер-пароль</label>
+            <input type="password" id="import-password-input" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn-secondary" id="btn-import-cancel">Отмена</button>
+            <button type="button" class="btn-primary" id="btn-import-confirm">Продолжить</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="trash-modal" role="dialog" aria-modal="true" aria-labelledby="trash-title">
+    <div class="modal">
+        <h2 id="trash-title">Корзина</h2>
+        <p class="modal-desc">Удалённые записи хранятся здесь (в том же зашифрованном файле), пока вы не удалите их навсегда.</p>
+        <div id="trash-list" class="entries"></div>
+        <div class="modal-actions split">
+            <button type="button" class="btn-danger" id="empty-trash-btn">Очистить корзину</button>
+            <button type="button" class="btn-secondary" id="btn-trash-close">Закрыть</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="details-modal" role="dialog" aria-modal="true" aria-labelledby="details-title">
+    <div class="modal">
+        <h2 id="details-title">Подробности</h2>
+        <div id="details-body"></div>
+        <div class="modal-actions">
+            <button type="button" class="btn-primary" id="btn-details-close">Закрыть</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="categories-modal" role="dialog" aria-modal="true" aria-labelledby="categories-title">
+    <div class="modal modal-wide">
+        <h2 id="categories-title">Категории</h2>
+        <p class="modal-desc">Группы, по которым записи раскладываются на главной странице. Названия хранятся только внутри зашифрованного файла. При удалении категории записи не удаляются, а переезжают в «Другое».</p>
+        <div class="form-group">
+            <label for="cat-name" id="cat-form-label">Новая категория</label>
+            <div class="cat-form">
+                <select id="cat-icon" aria-label="Значок категории"></select>
+                <input type="text" id="cat-name" maxlength="40" placeholder="Например: Работа" autocomplete="off">
+            </div>
+            <div class="cat-form-actions">
+                <button type="button" class="btn-primary" id="cat-save">Добавить</button>
+                <button type="button" class="btn-secondary" id="cat-cancel" hidden>Отмена</button>
+            </div>
+        </div>
+        <div id="categories-list" class="cat-list"></div>
+        <div class="modal-actions">
+            <button type="button" class="btn-secondary" id="btn-categories-close">Закрыть</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="github-modal" role="dialog" aria-modal="true" aria-labelledby="github-title">
+    <div class="modal">
+        <h2 id="github-title">Синхронизация с GitHub</h2>
+        <p class="modal-desc">Хранилище лежит в вашем приватном репозитории и сохраняется туда после каждого изменения. Каждое сохранение — коммит, поэтому любую прошлую версию можно восстановить. Если хранилище изменят на другом устройстве, страница не затрёт эти изменения молча.</p>
+        <div id="gh-connected" class="gh-connected" hidden>
+            <div class="gh-connected-text">Подключено: <b id="gh-connected-target"></b></div>
+            <button type="button" class="btn-danger" id="btn-gh-disconnect">Отключить на этом устройстве</button>
+        </div>
+        <div id="gh-form">
+            <div class="gh-grid">
+                <div class="form-group">
+                    <label for="gh-owner">Владелец (логин GitHub)</label>
+                    <input type="text" id="gh-owner" placeholder="username" autocomplete="off" autocapitalize="off" spellcheck="false">
+                </div>
+                <div class="form-group">
+                    <label for="gh-repo">Приватный репозиторий</label>
+                    <input type="text" id="gh-repo" placeholder="vault-data" autocomplete="off" autocapitalize="off" spellcheck="false">
+                </div>
+            </div>
+            <div class="gh-grid">
+                <div class="form-group">
+                    <label for="gh-path">Файл</label>
+                    <input type="text" id="gh-path" placeholder="passwords-vault.json" autocomplete="off" autocapitalize="off" spellcheck="false">
+                </div>
+                <div class="form-group">
+                    <label for="gh-branch">Ветка</label>
+                    <input type="text" id="gh-branch" placeholder="main" autocomplete="off" autocapitalize="off" spellcheck="false">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="gh-token">Токен доступа (fine-grained)</label>
+                <input type="password" id="gh-token" placeholder="github_pat_…" autocomplete="off" autocapitalize="off" spellcheck="false">
+            </div>
+            <p class="modal-note">Токен нужен только с доступом к этому репозиторию и правом Contents: Read and write. Он хранится только в этом браузере, зашифрованный вашим мастер-паролем, и отправляется только на api.github.com.</p>
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn-secondary" id="btn-github-close">Закрыть</button>
+            <button type="button" class="btn-primary" id="btn-gh-connect">Подключить</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="health-modal" role="dialog" aria-modal="true" aria-labelledby="health-title">
+    <div class="modal modal-wide">
+        <h2 id="health-title">🛡️ Отчёт о безопасности</h2>
+        <p class="modal-desc">Проверка выполняется полностью локально. HIBP — только по явному нажатию кнопки.</p>
+        <div id="health-body"></div>
+        <div class="modal-actions split">
+            <button type="button" class="btn-secondary btn-small" id="hibp-btn">🔍 Проверить утечки (HIBP)</button>
+            <button type="button" class="btn-secondary" id="btn-health-close">Закрыть</button>
+        </div>
+    </div>
+</div>
+
+<div class="busy-overlay" id="busy-overlay" aria-live="polite">
+    <div class="spinner"></div>
+    <p id="busy-text">Вычисление Argon2id…</p>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- hash-wasm Argon2 (UMD, WASM inlined as base64) ~30 KB -->
+<script>
+/*!
+ * hash-wasm (https://www.npmjs.com/package/hash-wasm)
+ * (c) Dani Biro
+ * @license MIT
+ */
+
+!function(A,I){"object"==typeof exports&&"undefined"!=typeof module?I(exports):"function"==typeof define&&define.amd?define(["exports"],I):I((A="undefined"!=typeof globalThis?globalThis:A||self).hashwasm=A.hashwasm||{})}(this,(function(A){"use strict";function I(A,I,i,C){return new(i||(i=Promise))((function(g,Q){function B(A){try{e(C.next(A))}catch(A){Q(A)}}function h(A){try{e(C.throw(A))}catch(A){Q(A)}}function e(A){var I;A.done?g(A.value):(I=A.value,I instanceof i?I:new i((function(A){A(I)}))).then(B,h)}e((C=C.apply(A,I||[])).next())}))}"function"==typeof SuppressedError&&SuppressedError;var i,C={name:"argon2",data:"AGFzbQEAAAABKQVgAX8Bf2AAAX9gEH9/f39/f39/f39/f39/f38AYAR/f39/AGACf38AAwYFAAECAwQFBgEBAoCAAgYIAX8BQZCoBAsHQQQGbWVtb3J5AgASSGFzaF9TZXRNZW1vcnlTaXplAAAOSGFzaF9HZXRCdWZmZXIAAQ5IYXNoX0NhbGN1bGF0ZQAECvEyBVgBAn9BACEBAkAgAEEAKAKICCICRg0AAkAgACACayIAQRB2IABBgIB8cSAASWoiAEAAQX9HDQBB/wHADwtBACEBQQBBACkDiAggAEEQdK18NwOICAsgAcALcAECfwJAQQAoAoAIIgANAEEAPwBBEHQiADYCgAhBACgCiAgiAUGAgCBGDQACQEGAgCAgAWsiAEEQdiAAQYCAfHEgAElqIgBAAEF/Rw0AQQAPC0EAQQApA4gIIABBEHStfDcDiAhBACgCgAghAAsgAAvcDgECfiAAIAQpAwAiECAAKQMAIhF8IBFCAYZC/v///x+DIBBC/////w+DfnwiEDcDACAMIBAgDCkDAIVCIIkiEDcDACAIIBAgCCkDACIRfCARQgGGQv7///8fgyAQQv////8Pg358IhA3AwAgBCAQIAQpAwCFQiiJIhA3AwAgACAQIAApAwAiEXwgEEL/////D4MgEUIBhkL+////H4N+fCIQNwMAIAwgECAMKQMAhUIwiSIQNwMAIAggECAIKQMAIhF8IBBC/////w+DIBFCAYZC/v///x+DfnwiEDcDACAEIBAgBCkDAIVCAYk3AwAgASAFKQMAIhAgASkDACIRfCARQgGGQv7///8fgyAQQv////8Pg358IhA3AwAgDSAQIA0pAwCFQiCJIhA3AwAgCSAQIAkpAwAiEXwgEUIBhkL+////H4MgEEL/////D4N+fCIQNwMAIAUgECAFKQMAhUIoiSIQNwMAIAEgECABKQMAIhF8IBBC/////w+DIBFCAYZC/v///x+DfnwiEDcDACANIBAgDSkDAIVCMIkiEDcDACAJIBAgCSkDACIRfCAQQv////8PgyARQgGGQv7///8fg358IhA3AwAgBSAQIAUpAwCFQgGJNwMAIAIgBikDACIQIAIpAwAiEXwgEUIBhkL+////H4MgEEL/////D4N+fCIQNwMAIA4gECAOKQMAhUIgiSIQNwMAIAogECAKKQMAIhF8IBFCAYZC/v///x+DIBBC/////w+DfnwiEDcDACAGIBAgBikDAIVCKIkiEDcDACACIBAgAikDACIRfCAQQv////8PgyARQgGGQv7///8fg358IhA3AwAgDiAQIA4pAwCFQjCJIhA3AwAgCiAQIAopAwAiEXwgEEL/////D4MgEUIBhkL+////H4N+fCIQNwMAIAYgECAGKQMAhUIBiTcDACADIAcpAwAiECADKQMAIhF8IBFCAYZC/v///x+DIBBC/////w+DfnwiEDcDACAPIBAgDykDAIVCIIkiEDcDACALIBAgCykDACIRfCARQgGGQv7///8fgyAQQv////8Pg358IhA3AwAgByAQIAcpAwCFQiiJIhA3AwAgAyAQIAMpAwAiEXwgEEL/////D4MgEUIBhkL+////H4N+fCIQNwMAIA8gECAPKQMAhUIwiSIQNwMAIAsgECALKQMAIhF8IBBC/////w+DIBFCAYZC/v///x+DfnwiEDcDACAHIBAgBykDAIVCAYk3AwAgACAFKQMAIhAgACkDACIRfCARQgGGQv7///8fgyAQQv////8Pg358IhA3AwAgDyAQIA8pAwCFQiCJIhA3AwAgCiAQIAopAwAiEXwgEUIBhkL+////H4MgEEL/////D4N+fCIQNwMAIAUgECAFKQMAhUIoiSIQNwMAIAAgECAAKQMAIhF8IBBC/////w+DIBFCAYZC/v///x+DfnwiEDcDACAPIBAgDykDAIVCMIkiEDcDACAKIBAgCikDACIRfCAQQv////8PgyARQgGGQv7///8fg358IhA3AwAgBSAQIAUpAwCFQgGJNwMAIAEgBikDACIQIAEpAwAiEXwgEUIBhkL+////H4MgEEL/////D4N+fCIQNwMAIAwgECAMKQMAhUIgiSIQNwMAIAsgECALKQMAIhF8IBFCAYZC/v///x+DIBBC/////w+DfnwiEDcDACAGIBAgBikDAIVCKIkiEDcDACABIBAgASkDACIRfCAQQv////8PgyARQgGGQv7///8fg358IhA3AwAgDCAQIAwpAwCFQjCJIhA3AwAgCyAQIAspAwAiEXwgEEL/////D4MgEUIBhkL+////H4N+fCIQNwMAIAYgECAGKQMAhUIBiTcDACACIAcpAwAiECACKQMAIhF8IBFCAYZC/v///x+DIBBC/////w+DfnwiEDcDACANIBAgDSkDAIVCIIkiEDcDACAIIBAgCCkDACIRfCARQgGGQv7///8fgyAQQv////8Pg358IhA3AwAgByAQIAcpAwCFQiiJIhA3AwAgAiAQIAIpAwAiEXwgEEL/////D4MgEUIBhkL+////H4N+fCIQNwMAIA0gECANKQMAhUIwiSIQNwMAIAggECAIKQMAIhF8IBBC/////w+DIBFCAYZC/v///x+DfnwiEDcDACAHIBAgBykDAIVCAYk3AwAgAyAEKQMAIhAgAykDACIRfCARQgGGQv7///8fgyAQQv////8Pg358IhA3AwAgDiAQIA4pAwCFQiCJIhA3AwAgCSAQIAkpAwAiEXwgEUIBhkL+////H4MgEEL/////D4N+fCIQNwMAIAQgECAEKQMAhUIoiSIQNwMAIAMgECADKQMAIhF8IBBC/////w+DIBFCAYZC/v///x+DfnwiEDcDACAOIBAgDikDAIVCMIkiEDcDACAJIBAgCSkDACIRfCAQQv////8PgyARQgGGQv7///8fg358IhA3AwAgBCAQIAQpAwCFQgGJNwMAC98aAQN/QQAhBEEAIAIpAwAgASkDAIU3A5AIQQAgAikDCCABKQMIhTcDmAhBACACKQMQIAEpAxCFNwOgCEEAIAIpAxggASkDGIU3A6gIQQAgAikDICABKQMghTcDsAhBACACKQMoIAEpAyiFNwO4CEEAIAIpAzAgASkDMIU3A8AIQQAgAikDOCABKQM4hTcDyAhBACACKQNAIAEpA0CFNwPQCEEAIAIpA0ggASkDSIU3A9gIQQAgAikDUCABKQNQhTcD4AhBACACKQNYIAEpA1iFNwPoCEEAIAIpA2AgASkDYIU3A/AIQQAgAikDaCABKQNohTcD+AhBACACKQNwIAEpA3CFNwOACUEAIAIpA3ggASkDeIU3A4gJQQAgAikDgAEgASkDgAGFNwOQCUEAIAIpA4gBIAEpA4gBhTcDmAlBACACKQOQASABKQOQAYU3A6AJQQAgAikDmAEgASkDmAGFNwOoCUEAIAIpA6ABIAEpA6ABhTcDsAlBACACKQOoASABKQOoAYU3A7gJQQAgAikDsAEgASkDsAGFNwPACUEAIAIpA7gBIAEpA7gBhTcDyAlBACACKQPAASABKQPAAYU3A9AJQQAgAikDyAEgASkD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",hash:"e4cdc523"};class g{constructor(){this.mutex=Promise.resolve()}lock(){let A=()=>{};return this.mutex=this.mutex.then((()=>new Promise(A))),new Promise((I=>{A=I}))}dispatch(A){return I(this,void 0,void 0,(function*(){const I=yield this.lock();try{return yield Promise.resolve(A())}finally{I()}}))}}const Q="undefined"!=typeof globalThis?globalThis:"undefined"!=typeof self?self:"undefined"!=typeof window?window:global,B=null!==(i=Q.Buffer)&&void 0!==i?i:null,h=Q.TextEncoder?new Q.TextEncoder:null;function e(A,I){return(15&A)+(A>>6|A>>3&8)<<4|(15&I)+(I>>6|I>>3&8)}function w(A,I){const i=I.length>>1;for(let C=0;C<i;C++){const i=C<<1;A[C]=e(I.charCodeAt(i),I.charCodeAt(i+1))}}const t="a".charCodeAt(0)-10,o="0".charCodeAt(0);function E(A,I,i){let C=0;for(let g=0;g<i;g++){let i=I[g]>>>4;A[C++]=i>9?i+t:i+o,i=15&I[g],A[C++]=i>9?i+t:i+o}return String.fromCharCode.apply(null,A)}const n=null!==B?A=>{if("string"==typeof A){const I=B.from(A,"utf8");return new Uint8Array(I.buffer,I.byteOffset,I.length)}if(B.isBuffer(A))return new Uint8Array(A.buffer,A.byteOffset,A.length);if(ArrayBuffer.isView(A))return new Uint8Array(A.buffer,A.byteOffset,A.byteLength);throw new Error("Invalid data type!")}:A=>{if("string"==typeof A)return h.encode(A);if(ArrayBuffer.isView(A))return new Uint8Array(A.buffer,A.byteOffset,A.byteLength);throw new Error("Invalid data type!")},r="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",D=new Uint8Array(256);for(let A=0;A<r.length;A++)D[r.charCodeAt(A)]=A;function F(A,I=!0){const i=A.length,C=i%3,g=[],Q=i-C;for(let I=0;I<Q;I+=3){const i=(A[I]<<16&16711680)+(A[I+1]<<8&65280)+(255&A[I+2]),C=r.charAt(i>>18&63)+r.charAt(i>>12&63)+r.charAt(i>>6&63)+r.charAt(63&i);g.push(C)}if(1===C){const C=A[i-1],Q=r.charAt(C>>2),B=r.charAt(C<<4&63);g.push(`${Q}${B}`),I&&g.push("==")}else if(2===C){const C=(A[i-2]<<8)+A[i-1],Q=r.charAt(C>>10),B=r.charAt(C>>4&63),h=r.charAt(C<<2&63);g.push(`${Q}${B}${h}`),I&&g.push("=")}return g.join("")}function f(A){let I=Math.floor(.75*A.length);const i=A.length;return"="===A[i-1]&&(I-=1,"="===A[i-2]&&(I-=1)),I}function k(A){const I=f(A),i=A.length,C=new Uint8Array(I);let g=0;for(let I=0;I<i;I+=4){const i=D[A.charCodeAt(I)],Q=D[A.charCodeAt(I+1)],B=D[A.charCodeAt(I+2)],h=D[A.charCodeAt(I+3)];C[g]=i<<2|Q>>4,g+=1,C[g]=(15&Q)<<4|B>>2,g+=1,C[g]=(3&B)<<6|63&h,g+=1}return C}const a=16384,s=new g,S=new Map;function U(A,i){return I(this,void 0,void 0,(function*(){let C=null,g=null,Q=!1;if("undefined"==typeof WebAssembly)throw new Error("WebAssembly is not supported in this environment!");const B=()=>new DataView(C.exports.memory.buffer).getUint32(C.exports.STATE_SIZE,!0),h=s.dispatch((()=>I(this,void 0,void 0,(function*(){if(!S.has(A.name)){const I=k(A.data),i=WebAssembly.compile(I);S.set(A.name,i)}const I=yield S.get(A.name);C=yield WebAssembly.instantiate(I,{})})))),t=(A=null)=>{Q=!0,C.exports.Hash_Init(A)},o=A=>{if(!Q)throw new Error("update() called before init()");(A=>{let I=0;for(;I<A.length;){const i=A.subarray(I,I+a);I+=i.length,g.set(i),C.exports.Hash_Update(i.length)}})(n(A))},r=new Uint8Array(2*i),D=(A,I=null)=>{if(!Q)throw new Error("digest() called before init()");return Q=!1,C.exports.Hash_Final(I),"binary"===A?g.slice(0,i):E(r,g,i)},F=A=>"string"==typeof A?A.length<4096:A.byteLength<a;let f=F;switch(A.name){case"argon2":case"scrypt":f=()=>!0;break;case"blake2b":case"blake2s":f=(A,I)=>I<=512&&F(A);break;case"blake3":f=(A,I)=>0===I&&F(A);break;case"xxhash64":case"xxhash3":case"xxhash128":case"crc64":f=()=>!1}return yield(()=>I(this,void 0,void 0,(function*(){C||(yield h);const A=C.exports.Hash_GetBuffer(),I=C.exports.memory.buffer;g=new Uint8Array(I,A,a)})))(),{getMemory:()=>g,writeMemory:(A,I=0)=>{g.set(A,I)},getExports:()=>C.exports,setMemorySize:A=>{C.exports.Hash_SetMemorySize(A);const I=C.exports.Hash_GetBuffer(),i=C.exports.memory.buffer;g=new Uint8Array(i,I,A)},init:t,update:o,digest:D,save:()=>{if(!Q)throw new Error("save() can only be called after init() and before digest()");const I=C.exports.Hash_GetState(),i=B(),g=C.exports.memory.buffer,h=new Uint8Array(g,I,i),e=new Uint8Array(4+i);return w(e,A.hash),e.set(h,4),e},load:I=>{if(!(I instanceof Uint8Array))throw new Error("load() expects an Uint8Array generated by save()");const i=C.exports.Hash_GetState(),g=B(),h=4+g,w=C.exports.memory.buffer;if(I.length!==h)throw new Error(`Bad state length (expected ${h} bytes, got ${I.length})`);if(!function(A,I){if(A.length!==2*I.length)return!1;for(let i=0;i<I.length;i++){const C=i<<1;if(I[i]!==e(A.charCodeAt(C),A.charCodeAt(C+1)))return!1}return!0}(A.hash,I.subarray(0,4)))throw new Error("This state was written by an incompatible hash implementation");const t=I.subarray(4);new Uint8Array(w,i,g).set(t),Q=!0},calculate:(A,I=null,Q=null)=>{if(!f(A,I))return t(I),o(A),D("hex",Q);const B=n(A);return g.set(B),C.exports.Hash_Calculate(B.length,I,Q),E(r,g,i)},hashLength:i}}))}var c={name:"blake2b",data:"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",hash:"c6f286e6"};function G(A){return!Number.isInteger(A)||A<8||A>512||A%8!=0?new Error("Invalid variant! Valid values: 8, 16, ..., 512"):null}function p(A=512,I=null){if(G(A))return Promise.reject(G(A));let i=null,C=A;if(null!==I){if(i=n(I),i.length>64)return Promise.reject(new Error("Max key length is 64 bytes"));g=A,Q=i.length,C=g|Q<<16}var g,Q;const B=A/8;return U(c,B).then((A=>{C>512&&A.writeMemory(i),A.init(C);const I={init:C>512?()=>(A.writeMemory(i),A.init(C),I):()=>(A.init(C),I),update:i=>(A.update(i),I),digest:I=>A.digest(I),save:()=>A.save(),load:i=>(A.load(i),I),blockSize:128,digestSize:B};return I}))}new g;const y=new DataView(new ArrayBuffer(4));function J(A){return y.setInt32(0,A,!0),new Uint8Array(y.buffer)}function l(A,i,C){return I(this,void 0,void 0,(function*(){if(C<=64){const A=yield p(8*C);return A.update(J(C)),A.update(i),A.digest("binary")}const I=Math.ceil(C/32)-2,g=new Uint8Array(C);A.init(),A.update(J(C)),A.update(i);let Q=A.digest("binary");g.set(Q.subarray(0,32),0);for(let i=1;i<I;i++)A.init(),A.update(Q),Q=A.digest("binary"),g.set(Q.subarray(0,32),32*i);const B=C-32*I;let h;return 64===B?(h=A,h.init()):h=yield p(8*B),h.update(Q),Q=h.digest("binary"),g.set(Q.subarray(0,B),32*I),g}))}function u(A){return I(this,void 0,void 0,(function*(){var I;const{parallelism:i,iterations:g,hashLength:Q}=A,B=n(A.password),h=n(A.salt),e=function(A){switch(A){case"d":return 0;case"i":return 1;default:return 2}}(A.hashType),{memorySize:t}=A,o=n(null!==(I=A.secret)&&void 0!==I?I:""),[r,D]=yield Promise.all([U(C,1024),p(512)]);r.setMemorySize(1024*t+1024);const f=new Uint8Array(24),k=new DataView(f.buffer);k.setInt32(0,i,!0),k.setInt32(4,Q,!0),k.setInt32(8,t,!0),k.setInt32(12,g,!0),k.setInt32(16,19,!0),k.setInt32(20,e,!0),r.writeMemory(f,1024*t),D.init(),D.update(f),D.update(J(B.length)),D.update(B),D.update(J(h.length)),D.update(h),D.update(J(o.length)),D.update(o),D.update(J(0));const a=4*Math.floor(t/(4*i)),s=new Uint8Array(72),S=D.digest("binary");s.set(S);for(let A=0;A<i;A++){s.set(J(0),64),s.set(J(A),68);let I=A*a,i=yield l(D,s,1024);r.writeMemory(i,1024*I),I+=1,s.set(J(1),64),i=yield l(D,s,1024),r.writeMemory(i,1024*I)}const c=new Uint8Array(1024);w(c,r.calculate(new Uint8Array([]),t));const G=yield l(D,c,Q);if("hex"===A.outputType){return E(new Uint8Array(2*Q),G,Q)}return"encoded"===A.outputType?function(A,I,i){const C=[`m=${I.memorySize}`,`t=${I.iterations}`,`p=${I.parallelism}`].join(",");return`$argon2${I.hashType}$v=19$${C}$${F(A,!1)}$${F(i,!1)}`}(h,A,G):G}))}const H=A=>{var I;if(!A||"object"!=typeof A)throw new Error("Invalid options parameter. It requires an object.");if(!A.password)throw new Error("Password must be specified");if(A.password=n(A.password),A.password.length<1)throw new Error("Password must be specified");if(!A.salt)throw new Error("Salt must be specified");if(A.salt=n(A.salt),A.salt.length<8)throw new Error("Salt should be at least 8 bytes long");if(A.secret=n(null!==(I=A.secret)&&void 0!==I?I:""),!Number.isInteger(A.iterations)||A.iterations<1)throw new Error("Iterations should be a positive number");if(!Number.isInteger(A.parallelism)||A.parallelism<1)throw new Error("Parallelism should be a positive number");if(!Number.isInteger(A.hashLength)||A.hashLength<4)throw new Error("Hash length should be at least 4 bytes.");if(!Number.isInteger(A.memorySize))throw new Error("Memory size should be specified.");if(A.memorySize<8*A.parallelism)throw new Error("Memory size should be at least 8 * parallelism.");if(void 0===A.outputType&&(A.outputType="hex"),!["hex","binary","encoded"].includes(A.outputType))throw new Error(`Insupported output type ${A.outputType}. Valid values: ['hex', 'binary', 'encoded']`)};A.argon2Verify=function(A){return I(this,void 0,void 0,(function*(){(A=>{if(!A||"object"!=typeof A)throw new Error("Invalid options parameter. It requires an object.");if(void 0===A.hash||"string"!=typeof A.hash)throw new Error("Hash should be specified")})(A);const I=((A,I,i)=>{const C=I.match(/^\$argon2(id|i|d)\$v=([0-9]+)\$((?:[mtp]=[0-9]+,){2}[mtp]=[0-9]+)\$([A-Za-z0-9+/]+)\$([A-Za-z0-9+/]+)$/);if(!C)throw new Error("Invalid hash");const[,g,Q,B,h,e]=C;if("19"!==Q)throw new Error(`Unsupported version: ${Q}`);const w={},t={m:"memorySize",p:"parallelism",t:"iterations"};for(const A of B.split(",")){const[I,i]=A.split("=");w[t[I]]=Number(i)}return Object.assign(Object.assign({},w),{password:A,secret:i,hashType:g,salt:k(h),hashLength:f(e),outputType:"encoded"})})(A.password,A.hash,A.secret);H(I);const i=A.hash.lastIndexOf("$")+1;return(yield u(I)).substring(i)===A.hash.substring(i)}))},A.argon2d=function(A){return I(this,void 0,void 0,(function*(){return H(A),u(Object.assign(Object.assign({},A),{hashType:"d"}))}))},A.argon2i=function(A){return I(this,void 0,void 0,(function*(){return H(A),u(Object.assign(Object.assign({},A),{hashType:"i"}))}))},A.argon2id=function(A){return I(this,void 0,void 0,(function*(){return H(A),u(Object.assign(Object.assign({},A),{hashType:"id"}))}))}}));
+
+</script>
+
+<script>
+/**
+ * Офлайн-менеджер паролей.
+ * KDF новых файлов: Argon2id (hash-wasm) → AES-256-GCM.
+ * Формат version 3: заголовок (version, kdf, argon2{m,t,p}, salt, …) в AAD.
+ * Обратная совместимость: v1/v2 (PBKDF2 600000) открываются без AAD,
+ * при первом сохранении мигрируют на Argon2id.
+ */
+
+const PBKDF2_ITERATIONS = 600000; // fallback для файлов v1/v2
+const MAX_PBKDF2_ITERATIONS = 10000000;
+
+// Параметры Argon2id по умолчанию (memory в KiB)
+const DEFAULT_ARGON2 = {
+    memorySize: 65536, // 64 MiB
+    iterations: 3,
+    parallelism: 1,
+    hashLength: 32
+};
+// Верхние пределы параметров из заголовка файла (защита от файла-«бомбы»)
+const MAX_ARGON2_MEMORY = 524288;   // 512 MiB
+const MAX_ARGON2_ITERATIONS = 20;
+const MAX_ARGON2_PARALLELISM = 8;
+
+const SALT_LENGTH = 16;
+const IV_LENGTH = 12;
+
+/** Типы записей: id → подпись, бейдж, подсказки полей */
+const ENTRY_TYPES = {
+    password: {
+        label: 'Пароль',
+        titlePh: 'Google, GitHub, банк…',
+        loginLabel: 'Логин / Email', loginPh: 'user@example.com',
+        secretLabel: 'Пароль', secretPh: 'Пароль',
+        urlLabel: 'URL', urlPh: 'https://…',
+        notesPh: 'Подсказка, 2FA, комментарий…'
+    },
+    api: {
+        label: 'API-ключ',
+        titlePh: 'OpenAI, Anthropic, Stripe…',
+        loginLabel: 'Идентификатор / Project', loginPh: 'project-id или org (необязательно)',
+        secretLabel: 'API-ключ', secretPh: 'sk-… / key_…',
+        urlLabel: 'Документация / Endpoint', urlPh: 'https://api.openai.com',
+        notesPh: 'Scope, лимиты, дата истечения…'
+    },
+    ssh: {
+        label: 'SSH',
+        titlePh: 'VPS-prod, home-server…',
+        loginLabel: 'Пользователь', loginPh: 'root / ubuntu / deploy',
+        secretLabel: 'Пароль / Passphrase', secretPh: 'Пароль или passphrase ключа',
+        urlLabel: 'Хост', urlPh: 'ssh://user@host:22 или host:port',
+        notesPh: 'Тип ключа (ed25519), путь к .pem, порт…'
+    },
+    token: {
+        label: 'Токен',
+        titlePh: 'GitHub PAT, Slack bot…',
+        loginLabel: 'Аккаунт / App', loginPh: 'username или app name',
+        secretLabel: 'Токен', secretPh: 'ghp_… / xoxb-… / Bearer…',
+        urlLabel: 'Сервис', urlPh: 'https://…',
+        notesPh: 'Права (scopes), срок действия…'
+    },
+    db: {
+        label: 'БД',
+        titlePh: 'Postgres prod, MySQL local…',
+        loginLabel: 'Пользователь БД', loginPh: 'postgres / admin',
+        secretLabel: 'Пароль', secretPh: 'Пароль БД',
+        urlLabel: 'Хост / Connection string', urlPh: 'host:5432 или postgresql://…',
+        notesPh: 'Имя БД, SSL, порт…'
+    },
+    wifi: {
+        label: 'Wi-Fi',
+        titlePh: 'Домашний Wi-Fi, офис…',
+        loginLabel: 'SSID (имя сети)', loginPh: 'MyNetwork',
+        secretLabel: 'Пароль сети', secretPh: 'Wi-Fi пароль',
+        urlLabel: 'Router URL', urlPh: 'http://192.168.1.1 (необязательно)',
+        notesPh: 'Частота, гостевая сеть…'
+    },
+    other: {
+        label: 'Другое',
+        titlePh: 'Название',
+        loginLabel: 'Логин / ID', loginPh: 'Необязательно',
+        secretLabel: 'Секрет', secretPh: 'Секретное значение',
+        urlLabel: 'URL / Ссылка', urlPh: 'Необязательно',
+        notesPh: 'Любые заметки…'
+    }
+};
+
+function applyEntryTypeUI(typeId) {
+    const t = ENTRY_TYPES[typeId] || ENTRY_TYPES.password;
+    const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+    const ph = (id, text) => { const el = document.getElementById(id); if (el) el.placeholder = text; };
+    set('label-title', 'Название *');
+    ph('f-title', t.titlePh);
+    set('label-login', t.loginLabel);
+    ph('f-login', t.loginPh);
+    set('label-password', t.secretLabel);
+    ph('f-password', t.secretPh);
+    set('label-url', t.urlLabel);
+    ph('f-url', t.urlPh);
+    set('label-notes', 'Заметки');
+    ph('f-notes', t.notesPh);
+}
+
+const FSA_SUPPORTED = 'showSaveFilePicker' in window && 'showOpenFilePicker' in window;
+
+function bufferToBase64(buf) {
+    const bytes = ArrayBuffer.isView(buf)
+        ? new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
+        : new Uint8Array(buf);
+    const chunkSize = 0x8000;
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
+    }
+    return btoa(binary);
+}
+
+function base64ToBuffer(b64) {
+    return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+}
+
+function showBusy(text) {
+    document.getElementById('busy-text').textContent = text || 'Вычисление Argon2id…';
+    document.getElementById('busy-overlay').classList.add('active');
+}
+function hideBusy() {
+    document.getElementById('busy-overlay').classList.remove('active');
+}
+
+/**
+ * Argon2id → CryptoKey для AES-GCM.
+ * password: string, salt: Uint8Array, params: {memorySize, iterations, parallelism, hashLength}
+ */
+async function deriveKeyArgon2(password, salt, params) {
+    const p = { ...DEFAULT_ARGON2, ...params };
+    const hash = await hashwasm.argon2id({
+        password,
+        salt,
+        parallelism: p.parallelism,
+        iterations: p.iterations,
+        memorySize: p.memorySize,
+        hashLength: p.hashLength,
+        outputType: 'binary'
+    });
+    return crypto.subtle.importKey('raw', hash, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+/** PBKDF2 (для старых файлов v1/v2) */
+async function deriveKeyPbkdf2(password, salt, iterations) {
+    const enc = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt']
+    );
+}
+
+/**
+ * Каноническая сериализация заголовка для AAD.
+ * Для Argon2: version, kdf, argon2{memory, iterations, parallelism}, salt
+ * Для legacy PBKDF2 при миграции не используется AAD.
+ */
+function serializeHeaderForAAD(header) {
+    const ordered = {
+        version: header.version,
+        kdf: header.kdf,
+        salt: header.salt
+    };
+    if (header.kdf === 'Argon2id' && header.argon2) {
+        ordered.argon2 = {
+            memory: header.argon2.memory,
+            iterations: header.argon2.iterations,
+            parallelism: header.argon2.parallelism
+        };
+    } else if (header.kdf === 'PBKDF2') {
+        ordered.hash = header.hash || 'SHA-256';
+        ordered.iterations = header.iterations;
+    }
+    return new TextEncoder().encode(JSON.stringify(ordered));
+}
+
+async function encryptJsonString(json, key, aadBytes) {
+    const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+    const params = { name: 'AES-GCM', iv };
+    if (aadBytes) params.additionalData = aadBytes;
+    const ciphertext = await crypto.subtle.encrypt(params, key, new TextEncoder().encode(json));
+    return { iv: bufferToBase64(iv), data: bufferToBase64(ciphertext) };
+}
+
+function encryptWithKey(data, key, aadBytes) {
+    return encryptJsonString(JSON.stringify(data), key, aadBytes);
+}
+
+async function decryptWithKey(payload, key, aadBytes) {
+    const iv = base64ToBuffer(payload.iv);
+    const ciphertext = base64ToBuffer(payload.data);
+    const params = { name: 'AES-GCM', iv };
+    if (aadBytes) params.additionalData = aadBytes;
+    const decrypted = await crypto.subtle.decrypt(params, key, ciphertext);
+    return JSON.parse(new TextDecoder().decode(decrypted));
+}
+
+function defaultCategories() { return DEFAULT_CATEGORIES.map(c => ({ id: c.id, name: c.name, icon: c.icon })); }
+
+/** Проверка и очистка категорий из файла. null — категорий в данных нет (старый файл) */
+function normalizeCategories(raw) {
+    if (!Array.isArray(raw)) return null;
+    const seen = new Set();
+    const names = new Set();
+    const out = [];
+    for (const c of raw) {
+        if (!c || typeof c !== 'object') continue;
+        const id = typeof c.id === 'string' ? c.id : '';
+        const name = typeof c.name === 'string' ? c.name.trim().slice(0, CATEGORY_NAME_MAX) : '';
+        const low = name.toLocaleLowerCase('ru');
+        if (!/^[A-Za-z0-9_-]{1,64}$/.test(id) || !name || seen.has(id) || names.has(low)) continue;
+        seen.add(id);
+        names.add(low);
+        out.push({ id, name, icon: (typeof c.icon === 'string' && c.icon && c.icon.length <= 8) ? c.icon : '📁' });
+        if (out.length >= MAX_CATEGORIES) break;
+    }
+    if (!seen.has(FALLBACK_CATEGORY_ID)) out.push({ id: FALLBACK_CATEGORY_ID, name: names.has('другое') ? 'Другое (общее)' : 'Другое', icon: '📁' });
+    return out;
+}
+
+/** Всё, что шифруется и записывается в хранилище */
+function vaultData() { return { entries, trash, categories }; }
+
+function orderedCategories() {
+    const other = categories.find(c => c.id === FALLBACK_CATEGORY_ID);
+    const rest = categories.filter(c => c.id !== FALLBACK_CATEGORY_ID);
+    return other ? [...rest, other] : rest;
+}
+
+function newCategoryId() {
+    return 'c_' + (crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+        : Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+}
+
+/** Текст ошибки или '' если название подходит */
+function validateCategoryName(raw, exceptId) {
+    const name = (raw || '').trim();
+    if (!name) return 'Введите название категории';
+    if (name.length > CATEGORY_NAME_MAX) return `Название не длиннее ${CATEGORY_NAME_MAX} символов`;
+    const low = name.toLocaleLowerCase('ru');
+    if (categories.some(c => c.id !== exceptId && c.name.toLocaleLowerCase('ru') === low)) return 'Категория с таким названием уже есть';
+    if (!exceptId && categories.length >= MAX_CATEGORIES) return `Достигнут предел: ${MAX_CATEGORIES} категорий`;
+    return '';
+}
+
+function normalizeVaultData(decrypted) {
+    const clean = (arr) => arr
+        .filter(e => e && typeof e === 'object' && !Array.isArray(e))
+        .map(e => (typeof e.id === 'string' && e.id) ? e : { ...e, id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2) });
+    if (Array.isArray(decrypted)) return { entries: clean(decrypted), trash: [], categories: null };
+    if (decrypted && typeof decrypted === 'object') {
+        return {
+            entries: Array.isArray(decrypted.entries) ? clean(decrypted.entries) : [],
+            trash: Array.isArray(decrypted.trash) ? clean(decrypted.trash) : [],
+            categories: normalizeCategories(decrypted.categories)
+        };
+    }
+    throw new Error('INVALID_VAULT_STRUCTURE');
+}
+
+/** Строгая проверка параметров Argon2id из заголовка файла. null — некорректно/слишком тяжело. */
+function parseArgon2Header(a) {
+    if (!a || typeof a !== 'object') return null;
+    const memory = Number(a.memory), iterations = Number(a.iterations), parallelism = Number(a.parallelism);
+    if (![memory, iterations, parallelism].every(Number.isInteger)) return null;
+    if (parallelism < 1 || parallelism > MAX_ARGON2_PARALLELISM) return null;
+    if (iterations < 1 || iterations > MAX_ARGON2_ITERATIONS) return null;
+    if (memory < 8 * parallelism || memory > MAX_ARGON2_MEMORY) return null;
+    return { memorySize: memory, iterations, parallelism, hashLength: 32 };
+}
+
+/** Заголовок version 3 для текущего открытого хранилища */
+function currentHeader() {
+    return {
+        version: 3,
+        kdf: 'Argon2id',
+        argon2: {
+            memory: vaultArgon2.memorySize,
+            iterations: vaultArgon2.iterations,
+            parallelism: vaultArgon2.parallelism
+        },
+        salt: vaultSaltB64
+    };
+}
+
+/** Обёртка: пока операция идёт, повторные вызовы (Enter, двойной клик) игнорируются */
+function exclusive(fn) {
+    return async function (...args) {
+        if (opBusy) return;
+        opBusy = true;
+        try { return await fn.apply(this, args); }
+        finally { opBusy = false; }
+    };
+}
+
+function notifySaved(ok, msg) {
+    if (!masterKey) return;
+    showToast(ok ? msg : 'Не удалось сохранить файл — изменения только в памяти', !ok);
+}
+
+let entries = [];
+let trash = [];
+let masterKey = null;
+let vaultSaltB64 = null;
+let vaultArgon2 = { ...DEFAULT_ARGON2 }; // memorySize→memory в файле
+let lockEpoch = 0;          // растёт при каждом lock(): отменяет «зависшие» async-операции
+let opBusy = false;         // идёт тяжёлая операция (Argon2 / сохранение) — повторный запуск игнорируется
+let clipboardDirty = false; // приложение положило что-то в буфер и он ещё не очищен
+let activeCat = 'all';              // выбранный фильтр категории
+let categories = [];                // категории открытого хранилища (заполняются при открытии)
+let catEditId = null;               // категория, редактируемая в окне «Категории»
+let catFollowType = false;          // в форме записи категория следует за выбранным типом
+let ghSession = null;               // активная синхронизация с GitHub: { owner, repo, path, branch, token, sha }
+let lastSyncError = null;           // последняя ошибка записи в GitHub (для понятных сообщений)
+const collapsedCats = new Set();    // свёрнутые категории (только на время сессии)
+const revealTimers = new Map();     // таймеры авто-скрытия показанных значений
+let editId = null;
+let lockDeadline = null;
+let lockInterval = null;
+let clipboardTimer = null;
+let toastTimer = null;
+let pendingImportPayload = null;
+let importModalMode = 'import';
+let vaultFileHandle = null;
+let lastFocusedBeforeModal = null;
+let fallbackMode = !FSA_SUPPORTED;
+let vaultDirty = false;
+let persistQueue = Promise.resolve();
+
+const DEFAULT_SETTINGS = { lockTimeout: 5, clipboardTimeout: 30 };
+let settings = { ...DEFAULT_SETTINGS };
+
+function checkStrength(pwd) {
+    let score = 0;
+    if (pwd.length >= 8) score++;
+    if (pwd.length >= 12) score++;
+    if (pwd.length >= 16) score++;
+    const hasLower = /[a-z]/.test(pwd);
+    const hasUpper = /[A-Z]/.test(pwd);
+    const hasDigit = /\d/.test(pwd);
+    const hasSpecial = /[^a-zA-Z0-9]/.test(pwd);
+    if (hasLower) score++;
+    if (hasUpper) score++;
+    if (hasDigit) score++;
+    if (hasSpecial) score++;
+    const unique = new Set(pwd).size;
+    if (unique >= 8) score++;
+    if (unique >= 12) score++;
+    const typesCount = [hasLower, hasUpper, hasDigit, hasSpecial].filter(Boolean).length;
+    if (typesCount < 2) score = Math.min(score, 1);
+    if (typesCount < 3) score = Math.min(score, 3);
+    const levels = [
+        { text: 'Очень слабый', color: '#ef4444', width: '15%' },
+        { text: 'Слабый', color: '#f97316', width: '30%' },
+        { text: 'Средний', color: '#eab308', width: '50%' },
+        { text: 'Хороший', color: '#84cc16', width: '70%' },
+        { text: 'Сильный', color: '#22c55e', width: '85%' },
+        { text: 'Отличный', color: '#10b981', width: '100%' }
+    ];
+    return { score, ...levels[Math.min(score, levels.length - 1)] };
+}
+
+function isStrongEnough(pwd) {
+    if (pwd.length < 9) return false;
+    if (!/[a-z]/.test(pwd)) return false;
+    if (!/[A-Z]/.test(pwd)) return false;
+    if (!/\d/.test(pwd)) return false;
+    if (!/[^a-zA-Z0-9]/.test(pwd)) return false;
+    if (new Set(pwd).size < 8) return false;
+    return true;
+}
+
+function renderStrength(inputId, fillId, textId) {
+    const pwd = document.getElementById(inputId).value;
+    const fill = document.getElementById(fillId);
+    const text = document.getElementById(textId);
+    if (!pwd) { fill.style.width = '0%'; text.textContent = ''; return; }
+    const s = checkStrength(pwd);
+    fill.style.width = s.width;
+    fill.style.background = s.color;
+    text.textContent = s.text;
+    text.style.color = s.color;
+}
+
+function showNewVaultUI() {
+    document.getElementById('new-vault-block').style.display = 'block';
+    document.getElementById('btn-open-file').style.display = 'none';
+    document.getElementById('btn-new-vault').style.display = 'none';
+    document.getElementById('btn-create-vault').style.display = 'inline-flex';
+    document.getElementById('btn-open-github').hidden = true;
+    document.getElementById('gh-login-info').hidden = true;
+    document.getElementById('master-password').focus();
+}
+
+function resetLoginUI() {
+    document.getElementById('new-vault-block').style.display = 'none';
+    document.getElementById('btn-open-file').style.display = 'inline-flex';
+    document.getElementById('btn-new-vault').style.display = 'inline-flex';
+    document.getElementById('btn-create-vault').style.display = 'none';
+    document.getElementById('master-password').value = '';
+    document.getElementById('master-password-confirm').value = '';
+    document.getElementById('strength-fill').style.width = '0%';
+    document.getElementById('strength-text').textContent = '';
+    updateGhLoginButton();
+}
+
+async function verifyPermission(handle, readWrite) {
+    const opts = readWrite ? { mode: 'readwrite' } : {};
+    try {
+        if ((await handle.queryPermission(opts)) === 'granted') return true;
+        if ((await handle.requestPermission(opts)) === 'granted') return true;
+    } catch (e) {}
+    return false;
+}
+
+function openVaultFile() {
+    if (FSA_SUPPORTED) openVaultFileFSA();
+    else document.getElementById('fallback-open-input').click();
+}
+
+async function openVaultFileFSA() {
+    try {
+        const [handle] = await window.showOpenFilePicker({
+            types: [{ description: 'Файл хранилища', accept: { 'application/json': ['.json'] } }],
+            multiple: false
+        });
+        const ok = await verifyPermission(handle, true);
+        if (!ok) { showToast('Нет доступа к файлу', true); return; }
+        const file = await handle.getFile();
+        const text = await file.text();
+        let payload;
+        try { payload = JSON.parse(text); } catch { showToast('Неверный формат файла', true); return; }
+        if (!payload.salt || !payload.iv || !payload.data) {
+            showToast('Это не файл хранилища паролей', true);
+            return;
+        }
+        pendingImportPayload = payload;
+        vaultFileHandle = handle;
+        importModalMode = 'open';
+        prepareImportModal(payload);
+    } catch (e) {
+        if (e.name !== 'AbortError') { showToast('Не удалось открыть файл', true); console.error(e); }
+    }
+}
+
+function handleFallbackOpenFile(event) {
+    const file = event.target.files[0];
+    event.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const payload = JSON.parse(e.target.result);
+            if (!payload.salt || !payload.iv || !payload.data) {
+                showToast('Это не файл хранилища паролей', true);
+                return;
+            }
+            pendingImportPayload = payload;
+            vaultFileHandle = null;
+            importModalMode = 'open';
+            prepareImportModal(payload);
+        } catch {
+            showToast('Неверный формат файла', true);
+        }
+    };
+    reader.readAsText(file);
+}
+
+function prepareImportModal(payload) {
+    document.getElementById('import-modal-title').textContent =
+        importModalMode === 'open' ? 'Введите мастер-пароль' : 'Пароль для импорта';
+    document.getElementById('import-modal-desc').textContent =
+        importModalMode === 'open'
+            ? 'Пароль, которым было зашифровано это хранилище.'
+            : 'Введите мастер-пароль, которым был зашифрован этот файл.';
+    document.getElementById('import-password-input').value = '';
+    openModalEl('import-password-modal', 'import-password-input');
+}
+
+const createNewVault = exclusive(async function createNewVault() {
+    const pwd = document.getElementById('master-password').value;
+    const confirm = document.getElementById('master-password-confirm').value;
+    if (!pwd) { showToast('Введите пароль', true); return; }
+    if (pwd !== confirm) { showToast('Пароли не совпадают', true); return; }
+    if (!isStrongEnough(pwd)) {
+        showToast('Минимум 9 символов: строчные, заглавные, цифра, спецсимвол, не менее 8 уникальных', true);
+        return;
+    }
+
+    const salt = crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
+    const argon2Params = { ...DEFAULT_ARGON2 };
+
+    showBusy('Вычисление Argon2id (может занять несколько секунд)…');
+    let key;
+    try {
+        key = await deriveKeyArgon2(pwd, salt, argon2Params);
+    } catch (e) {
+        hideBusy();
+        showToast('Ошибка Argon2id: ' + (e.message || e), true);
+        console.error(e);
+        return;
+    }
+    hideBusy();
+
+    // Заголовок version 3 + AAD
+    const header = {
+        version: 3,
+        kdf: 'Argon2id',
+        argon2: {
+            memory: argon2Params.memorySize,
+            iterations: argon2Params.iterations,
+            parallelism: argon2Params.parallelism
+        },
+        salt: bufferToBase64(salt)
+    };
+    const aad = serializeHeaderForAAD(header);
+    const payload = await encryptWithKey({ entries: [], trash: [], categories: defaultCategories() }, key, aad);
+    const vaultObj = { ...header, ...payload };
+
+    let handle = null;
+    if (FSA_SUPPORTED) {
+        try {
+            handle = await window.showSaveFilePicker({
+                suggestedName: 'passwords-vault.json',
+                types: [{ description: 'Файл хранилища', accept: { 'application/json': ['.json'] } }]
+            });
+            const ok = await verifyPermission(handle, true);
+            if (!ok) { showToast('Нет разрешения на запись', true); return; }
+            const writable = await handle.createWritable();
+            await writable.write(JSON.stringify(vaultObj, null, 2));
+            await writable.close();
+            document.getElementById('file-name-display').textContent = handle.name;
+        } catch (e) {
+            if (e.name === 'AbortError') return;
+            showToast('Ошибка создания', true);
+            console.error(e);
+            return;
+        }
+    } else {
+        downloadJson(vaultObj, 'passwords-vault.json');
+        document.getElementById('file-name-display').textContent = 'passwords-vault.json (скачан)';
+        fallbackMode = true;
+    }
+
+    masterKey = key;
+    vaultFileHandle = handle;
+    vaultSaltB64 = header.salt;
+    vaultArgon2 = { ...argon2Params };
+    entries = [];
+    trash = [];
+    categories = defaultCategories();
+    vaultDirty = false;
+    showApp();
+    showToast('Хранилище создано');
+});
+
+function downloadJson(obj, filename) {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a); // Firefox: ссылка должна быть в DOM
+    a.click();
+    // Немедленный revoke срывает скачивание в Firefox/Safari — отзываем с задержкой
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 60000);
+}
+
+function wipeClipboard() {
+    if (!clipboardDirty) return; // чужое содержимое буфера не трогаем
+    clipboardDirty = false;
+    try { navigator.clipboard.writeText('').catch(() => {}); } catch (e) {}
+}
+
+function lock() {
+    lockEpoch++;
+    clearRevealTimers();
+    activeCat = 'all';
+    collapsedCats.clear();
+    categories = [];
+    catEditId = null;
+    catFollowType = false;
+    ghSession = null;
+    lastSyncError = null;
+    setSyncState('');
+    masterKey = null;
+    vaultSaltB64 = null;
+    vaultArgon2 = { ...DEFAULT_ARGON2 };
+    entries = [];
+    trash = [];
+    pendingImportPayload = null;
+    vaultFileHandle = null;
+    editId = null;
+    vaultDirty = false;
+    hideBusy();
+    stopLockTimer();
+    clearClipboardTimer();
+    const clearIds = [
+        'entries-list', 'trash-list', 'health-body', 'cat-filter', 'details-body', 'categories-list', 'cat-name', 'f-newcat-name', 'gh-token',
+        'f-title', 'f-login', 'f-password', 'f-url', 'f-notes', 'f-type',
+        'cp-current', 'cp-new', 'cp-new-confirm',
+        'import-password-input', 'search',
+        'master-password', 'master-password-confirm'
+    ];
+    clearIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (el.tagName === 'DIV') el.innerHTML = '';
+        else if (el.tagName === 'SELECT') el.selectedIndex = 0;
+        else el.value = '';
+    });
+    document.querySelectorAll('.password-hidden').forEach(el => {
+        el.textContent = '••••••••';
+        el.classList.add('password-hidden');
+    });
+    const fp = document.getElementById('f-password');
+    if (fp) fp.type = 'password';
+    ['modal', 'settings-modal', 'change-password-modal', 'import-password-modal', 'trash-modal', 'health-modal', 'details-modal', 'categories-modal', 'github-modal']
+        .forEach(id => document.getElementById(id).classList.remove('active'));
+    document.getElementById('f-newcat-block').hidden = true;
+    document.getElementById('f-category').innerHTML = ''; // названия категорий не остаются в DOM после блокировки
+    document.getElementById('fallback-banner').classList.remove('visible');
+    document.getElementById('app').style.display = 'none';
+    document.getElementById('login-screen').style.display = 'flex';
+    resetLoginUI();
+    wipeClipboard();
+}
+
+function showApp() {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    if (ghSession) {
+        document.getElementById('fallback-banner').classList.remove('visible');
+        setSyncState('ok');
+    } else if (fallbackMode || !vaultFileHandle) {
+        setSyncState('');
+        document.getElementById('fallback-banner').classList.add('visible');
+    } else {
+        setSyncState('');
+        document.getElementById('fallback-banner').classList.remove('visible');
+    }
+    renderEntries();
+    startLockTimer();
+    updateTrashBadge();
+}
+
+function startLockTimer() {
+    stopLockTimer();
+    if (settings.lockTimeout <= 0) {
+        document.getElementById('lock-timer').textContent = '';
+        return;
+    }
+    lockDeadline = Date.now() + settings.lockTimeout * 60 * 1000;
+    const tick = () => {
+        const remaining = Math.max(0, Math.round((lockDeadline - Date.now()) / 1000));
+        if (remaining <= 0) {
+            lock();
+            showToast('Заблокировано из-за бездействия');
+            return;
+        }
+        const m = Math.floor(remaining / 60);
+        const s = remaining % 60;
+        document.getElementById('lock-timer').textContent = `Блокировка через ${m}:${s.toString().padStart(2, '0')}`;
+    };
+    tick();
+    lockInterval = setInterval(tick, 1000);
+}
+
+function stopLockTimer() {
+    if (lockInterval) { clearInterval(lockInterval); lockInterval = null; }
+    lockDeadline = null;
+    const el = document.getElementById('lock-timer');
+    if (el) el.textContent = '';
+}
+
+let lastActivityBump = 0;
+function resetActivity() {
+    if (!masterKey || !lockInterval) return;
+    const now = Date.now();
+    if (now - lastActivityBump < 1000) return;
+    lastActivityBump = now;
+    if (settings.lockTimeout > 0) {
+        lockDeadline = now + settings.lockTimeout * 60 * 1000;
+    }
+}
+
+['mousemove', 'keydown', 'click', 'scroll', 'touchstart'].forEach(evt => {
+    document.addEventListener(evt, resetActivity, { passive: true });
+});
+
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && masterKey && lockDeadline && Date.now() >= lockDeadline) {
+        lock();
+        showToast('Заблокировано из-за бездействия');
+    }
+});
+
+function clearClipboardTimer() {
+    if (clipboardTimer) { clearTimeout(clipboardTimer); clipboardTimer = null; }
+}
+
+function scheduleClipboardClear() {
+    clearClipboardTimer();
+    if (settings.clipboardTimeout <= 0) return;
+    clipboardTimer = setTimeout(async () => {
+        clipboardTimer = null;
+        try {
+            await navigator.clipboard.writeText('');
+            clipboardDirty = false;
+            showToast('Буфер очищен');
+        } catch (e) {}
+    }, settings.clipboardTimeout * 1000);
+}
+
+/**
+ * Снимок состояния делается синхронно в момент вызова, запись идёт по очереди.
+ * Так последовательные вызовы не пересекаются, а блокировка посреди очереди
+ * не теряет уже внесённые изменения и не даёт ложных ошибок.
+ * Возвращает Promise<boolean> — удалось ли записать.
+ */
+function persist() {
+    if (!masterKey || !vaultSaltB64) return Promise.resolve(false);
+    const snap = {
+        key: masterKey,
+        header: currentHeader(),
+        json: JSON.stringify(vaultData()),
+        handle: vaultFileHandle,
+        gh: ghSession            // ссылка: sha обновляется по ходу очереди, переживает lock()
+    };
+    const job = persistQueue.then(() => doPersist(snap));
+    persistQueue = job.catch(() => {}); // сбой одной записи не рвёт цепочку
+    return job.then(() => true, (e) => { console.error(e); return false; });
+}
+
+async function doPersist(snap) {
+    const aad = serializeHeaderForAAD(snap.header);
+    const payload = await encryptJsonString(snap.json, snap.key, aad);
+    const vaultObj = { ...snap.header, ...payload };
+    const sameSession = () => masterKey === snap.key;
+
+    if (snap.gh) {
+        if (sameSession()) setSyncState('saving');
+        try {
+            snap.gh.sha = await ghPut(snap.gh, JSON.stringify(vaultObj, null, 2), snap.gh.sha);
+        } catch (e) {
+            lastSyncError = e;
+            if (sameSession() && ghSession === snap.gh) {
+                vaultDirty = true;
+                setSyncState(e.code === 'CONFLICT' ? 'conflict' : 'error', e);
+            }
+            throw e;
+        }
+        lastSyncError = null;
+        if (sameSession() && ghSession === snap.gh) { vaultDirty = false; setSyncState('ok'); }
+        return;
+    }
+
+    if (snap.handle && FSA_SUPPORTED) {
+        if (!(await verifyPermission(snap.handle, true))) throw new Error('NO_FILE_ACCESS');
+        const writable = await snap.handle.createWritable();
+        try {
+            await writable.write(JSON.stringify(vaultObj, null, 2));
+            await writable.close();
+        } catch (e) {
+            try { await writable.abort(); } catch (_) {}
+            throw e;
+        }
+        if (sameSession()) vaultDirty = false;
+    } else if (sameSession()) {
+        // режим без File System Access: файл скачивается вручную
+        vaultDirty = true;
+        document.getElementById('fallback-banner').classList.add('visible');
+    }
+}
+
+async function downloadCurrentVault() {
+    if (!masterKey || !vaultSaltB64) return;
+    try {
+        const header = currentHeader();
+        const payload = await encryptWithKey(vaultData(), masterKey, serializeHeaderForAAD(header));
+        const name = (vaultFileHandle && vaultFileHandle.name) || 'passwords-vault.json';
+        downloadJson({ ...header, ...payload }, name);
+        vaultDirty = false;
+        showToast('Файл скачан');
+    } catch (e) {
+        showToast('Ошибка скачивания', true);
+        console.error(e);
+    }
+}
+
+/** Категории по умолчанию. Хранятся внутри зашифрованного хранилища: их можно переименовать и удалить */
+const DEFAULT_CATEGORIES = [
+    { id: 'accounts', icon: '🔐', name: 'Аккаунты и сайты' },
+    { id: 'dev',      icon: '🔑', name: 'API-ключи и токены' },
+    { id: 'infra',    icon: '🖥️', name: 'Серверы и базы данных' },
+    { id: 'network',  icon: '📶', name: 'Сеть' },
+    { id: 'other',    icon: '📁', name: 'Другое' }      // запасная категория: удалить нельзя
+];
+/** Куда по умолчанию попадает запись данного типа (если категория не выбрана явно) */
+const DEFAULT_CATEGORY_FOR_TYPE = { password: 'accounts', api: 'dev', token: 'dev', ssh: 'infra', db: 'infra', wifi: 'network', other: 'other' };
+const BUILTIN_CATEGORY_IDS = new Set(DEFAULT_CATEGORIES.map(c => c.id));
+const FALLBACK_CATEGORY_ID = 'other';
+const CATEGORY_NAME_MAX = 40;
+const MAX_CATEGORIES = 30;
+const CATEGORY_ICONS = ['📁', '🏠', '💼', '🎮', '💳', '🛒', '🎓', '🧰', '☁️', '📧', '🧾', '⭐', '🔐', '🔑', '🖥️', '📶'];
+const NEW_CAT_VALUE = '__new__';
+
+/** Типы, у которых логин по умолчанию скрыт (показывается по кнопке) */
+const MASKED_LOGIN_TYPES = new Set(['api', 'ssh', 'token', 'db']);
+/** Через сколько миллисекунд показанный пароль/логин прячется сам */
+const REVEAL_MS = 30000;
+const MASK = '••••••••';
+
+function entryTypeId(e) { return e.type && ENTRY_TYPES[e.type] ? e.type : 'password'; }
+function categoryOf(e) {
+    if (e.category && categories.some(c => c.id === e.category)) return e.category;
+    const byType = DEFAULT_CATEGORY_FOR_TYPE[entryTypeId(e)];
+    if (byType && categories.some(c => c.id === byType)) return byType;
+    return FALLBACK_CATEGORY_ID;
+}
+
+function categoryById(id) { return categories.find(c => c.id === id) || null; }
+
+function pluralize(n, one, few, many) {
+    const mod10 = n % 10, mod100 = n % 100;
+    if (mod10 === 1 && mod100 !== 11) return one;
+    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
+    return many;
+}
+
+function sanitizeUrl(raw) {
+    if (!raw) return null;
+    let u = raw.trim();
+    if (!u) return null;
+    if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+    try {
+        const parsed = new URL(u);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+        return parsed.href;
+    } catch { return null; }
+}
+
+function createFieldRow(labelText, valueText, actionButtons) {
+    const row = document.createElement('div');
+    row.className = 'entry-field';
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = labelText;
+    row.appendChild(label);
+    const value = document.createElement('span');
+    value.className = 'value';
+    if (valueText && valueText.node) value.appendChild(valueText.node);
+    else {
+        value.textContent = valueText;
+        if (valueText && valueText.id) value.id = valueText.id;
+    }
+    row.appendChild(value);
+    actionButtons.forEach(btn => {
+        const b = document.createElement('button');
+        b.className = 'copy-btn';
+        b.type = 'button';
+        b.textContent = btn.label;
+        b.dataset.action = btn.action;
+        b.dataset.id = btn.id;
+        row.appendChild(b);
+    });
+    return row;
+}
+
+function createEntryElement(e) {
+    const typeId = entryTypeId(e);
+    const typeMeta = ENTRY_TYPES[typeId];
+    const div = document.createElement('div');
+    div.className = 'entry';
+    const header = document.createElement('div');
+    header.className = 'entry-header';
+    const title = document.createElement('div');
+    title.className = 'entry-title';
+    const titleText = document.createElement('span');
+    titleText.textContent = e.title || 'Без названия';
+    title.appendChild(titleText);
+    const badge = document.createElement('span');
+    badge.className = 'type-badge type-' + typeId;
+    badge.textContent = typeMeta.label;
+    title.appendChild(badge);
+    header.appendChild(title);
+
+    // Меню действий «⋮»: изменить / дублировать / удалить спрятаны, чтобы не нажать случайно
+    const menu = document.createElement('div');
+    menu.className = 'entry-menu';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'menu-btn';
+    toggle.textContent = '⋮';
+    toggle.dataset.action = 'menu-toggle';
+    toggle.dataset.id = e.id;
+    toggle.setAttribute('aria-label', 'Действия с записью «' + (e.title || 'Без названия') + '»');
+    toggle.setAttribute('aria-haspopup', 'menu');
+    toggle.setAttribute('aria-expanded', 'false');
+    const menuList = document.createElement('div');
+    menuList.className = 'menu-list';
+    menuList.setAttribute('role', 'menu');
+    menuList.hidden = true;
+    const addItem = (label, action, extraClass) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'menu-item' + (extraClass ? ' ' + extraClass : '');
+        b.setAttribute('role', 'menuitem');
+        b.textContent = label;
+        b.dataset.action = action;
+        b.dataset.id = e.id;
+        menuList.appendChild(b);
+    };
+    addItem('✏️ Изменить', 'edit');
+    addItem('📄 Дублировать', 'duplicate');
+    const sep = document.createElement('div');
+    sep.className = 'menu-sep';
+    sep.setAttribute('role', 'separator');
+    menuList.appendChild(sep);
+    addItem('🗑️ В корзину…', 'delete', 'danger');
+    menu.appendChild(toggle);
+    menu.appendChild(menuList);
+    header.appendChild(menu);
+    div.appendChild(header);
+
+    // Одинаковая структура у всех карточек: логин, пароль, кнопка «Подробности»
+    if (e.login) {
+        if (MASKED_LOGIN_TYPES.has(typeId)) {
+            const loginSpan = document.createElement('span');
+            loginSpan.id = 'login-' + e.id;
+            loginSpan.className = 'password-hidden';
+            loginSpan.textContent = MASK;
+            div.appendChild(createFieldRow(typeMeta.loginLabel + ':', { node: loginSpan }, [
+                { action: 'toggle-login', id: e.id, label: 'Показать' },
+                { action: 'copy-login', id: e.id, label: 'Копировать' }
+            ]));
+        } else {
+            div.appendChild(createFieldRow(typeMeta.loginLabel + ':', e.login, [
+                { action: 'copy-login', id: e.id, label: 'Копировать' }
+            ]));
+        }
+    } else {
+        const row = createFieldRow(typeMeta.loginLabel + ':', '—', []);
+        row.querySelector('.value').classList.add('muted');
+        div.appendChild(row);
+    }
+    if (e.password) {
+        const pwdSpan = document.createElement('span');
+        pwdSpan.id = 'pwd-' + e.id;
+        pwdSpan.className = 'password-hidden';
+        pwdSpan.textContent = MASK;
+        div.appendChild(createFieldRow(typeMeta.secretLabel + ':', { node: pwdSpan }, [
+            { action: 'toggle-password', id: e.id, label: 'Показать' },
+            { action: 'copy-password', id: e.id, label: 'Копировать' }
+        ]));
+    } else {
+        const row = createFieldRow(typeMeta.secretLabel + ':', '—', []);
+        row.querySelector('.value').classList.add('muted');
+        div.appendChild(row);
+    }
+
+    const foot = document.createElement('div');
+    foot.className = 'entry-foot';
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'entry-more';
+    more.dataset.action = 'details';
+    more.dataset.id = e.id;
+    more.setAttribute('aria-haspopup', 'dialog');
+    const moreText = document.createElement('span');
+    moreText.textContent = 'Подробности';
+    more.appendChild(moreText);
+    const hints = document.createElement('span');
+    hints.className = 'hints';
+    hints.setAttribute('aria-hidden', 'true');
+    const hintParts = [];
+    if (e.url) hintParts.push('🔗');
+    if (e.notes) hintParts.push('📝');
+    hints.textContent = hintParts.join(' ');
+    if (hintParts.length) more.title = [e.url ? 'есть адрес' : '', e.notes ? 'есть заметка' : ''].filter(Boolean).join(', ');
+    more.appendChild(hints);
+    const arrow = document.createElement('span');
+    arrow.className = 'arrow';
+    arrow.setAttribute('aria-hidden', 'true');
+    arrow.textContent = '›';
+    more.appendChild(arrow);
+    foot.appendChild(more);
+    div.appendChild(foot);
+    return div;
+}
+
+function createCategorySection(group, forceOpen) {
+    const collapsed = !forceOpen && collapsedCats.has(group.cat.id);
+    const sec = document.createElement('section');
+    sec.className = 'cat';
+    const head = document.createElement('button');
+    head.type = 'button';
+    head.className = 'cat-head';
+    head.dataset.action = 'toggle-cat';
+    head.dataset.cat = group.cat.id;
+    head.setAttribute('aria-expanded', String(!collapsed));
+    const icon = document.createElement('span');
+    icon.textContent = group.cat.icon;
+    icon.setAttribute('aria-hidden', 'true');
+    const name = document.createElement('span');
+    name.className = 'cat-name';
+    name.textContent = group.cat.name;
+    const count = document.createElement('span');
+    count.className = 'cat-count';
+    count.textContent = String(group.items.length);
+    const chev = document.createElement('span');
+    chev.className = 'chev';
+    chev.textContent = '▾';
+    chev.setAttribute('aria-hidden', 'true');
+    [icon, name, count, chev].forEach(n => head.appendChild(n));
+    const grid = document.createElement('div');
+    grid.className = 'cat-grid';
+    grid.hidden = collapsed;
+    if (group.items.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'cat-empty';
+        const t = document.createElement('span');
+        t.textContent = 'В этой категории пока нет записей';
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'btn-secondary btn-small';
+        b.dataset.action = 'add-to-cat';
+        b.dataset.cat = group.cat.id;
+        b.textContent = '+ Добавить сюда';
+        empty.appendChild(t);
+        empty.appendChild(b);
+        grid.appendChild(empty);
+    } else {
+        group.items.forEach(e => grid.appendChild(createEntryElement(e)));
+    }
+    sec.appendChild(head);
+    sec.appendChild(grid);
+    return sec;
+}
+
+function renderCategoryChips(groups, total) {
+    const box = document.getElementById('cat-filter');
+    box.innerHTML = '';
+    const make = (id, label, n, action, extraClass) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'chip' + (extraClass ? ' ' + extraClass : '');
+        b.dataset.action = action;
+        if (id) b.dataset.cat = id;
+        if (action === 'filter-cat') b.setAttribute('aria-pressed', String(activeCat === id));
+        b.appendChild(document.createTextNode(label + (n === null ? '' : ' ')));
+        if (n !== null) {
+            const c = document.createElement('span');
+            c.className = 'n';
+            c.textContent = String(n);
+            b.appendChild(c);
+        }
+        box.appendChild(b);
+    };
+    if (groups.length >= 2) { // «Все записи» — это фильтр-показать-всё, а не категория
+        make('all', 'Все записи', total, 'filter-cat');
+        groups.forEach(g => make(g.cat.id, g.cat.icon + ' ' + g.cat.name, g.items.length, 'filter-cat'));
+    }
+    make(null, '➕ Категория', null, 'new-category', 'chip-add');
+}
+
+function renderEntries() {
+    clearRevealTimers();
+    closeMenus();
+    const list = document.getElementById('entries-list');
+    const query = (document.getElementById('search').value || '').toLowerCase().trim();
+    let filtered = entries;
+    if (query) {
+        filtered = entries.filter(e => {
+            const typeLabel = (ENTRY_TYPES[e.type] && ENTRY_TYPES[e.type].label) || '';
+            const cat = categoryById(categoryOf(e));
+            return (e.title || '').toLowerCase().includes(query) ||
+                (e.login || '').toLowerCase().includes(query) ||
+                (e.notes || '').toLowerCase().includes(query) ||
+                (e.url || '').toLowerCase().includes(query) ||
+                typeLabel.toLowerCase().includes(query) ||
+                (e.type || '').toLowerCase().includes(query) ||
+                (cat ? cat.name.toLowerCase().includes(query) : false);
+        });
+    }
+    document.getElementById('entry-count').textContent =
+        `${entries.length} ${pluralize(entries.length, 'запись', 'записи', 'записей')}`;
+    list.innerHTML = '';
+    document.getElementById('cat-filter').innerHTML = '';
+    const sorted = [...filtered].sort((a, b) => (a.title || '').localeCompare(b.title || '', 'ru'));
+    // пустые встроенные категории скрыты; пустые свои — видны (кроме режима поиска), чтобы в них можно было добавить запись
+    const groups = orderedCategories()
+        .map(cat => ({ cat, items: sorted.filter(e => categoryOf(e) === cat.id) }))
+        .filter(g => g.items.length > 0 || (!query && !BUILTIN_CATEGORY_IDS.has(g.cat.id)));
+    if (activeCat !== 'all' && !groups.some(g => g.cat.id === activeCat)) activeCat = 'all';
+    if (!(query && groups.length === 0)) renderCategoryChips(groups, filtered.length);
+    if (groups.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        const p = document.createElement('p');
+        p.textContent = query ? 'Ничего не найдено' : 'Пока нет записей';
+        empty.appendChild(p);
+        if (!query) {
+            const addBtn = document.createElement('button');
+            addBtn.className = 'btn-primary';
+            addBtn.type = 'button';
+            addBtn.textContent = 'Добавить первую';
+            addBtn.addEventListener('click', () => openModal());
+            empty.appendChild(addBtn);
+        }
+        list.appendChild(empty);
+        return;
+    }
+    groups
+        .filter(g => activeCat === 'all' || g.cat.id === activeCat)
+        .forEach(g => list.appendChild(createCategorySection(g, !!query))); // при поиске всё раскрыто
+}
+
+
+
+
+/* ================= Синхронизация с GitHub =================
+ * Хранилище лежит в приватном репозитории; страница читает и пишет его через GitHub API.
+ * Каждое сохранение — коммит (история версий). Конфликт ловится по sha: чужие изменения не затираются молча.
+ * Токен хранится только в localStorage этого браузера, зашифрованный ключом хранилища (тем же Argon2id).
+ * В localStorage также лежит копия открытой части заголовка (соль и параметры) — она не секретна.
+ */
+const GH_STORAGE_KEY = 'pm-github-sync-v1';
+const GH_TOKEN_AAD = new TextEncoder().encode('pm-github-token-v1');
+const GH_COMMIT_MESSAGE = 'vault: update'; // без названий записей и любых данных
+
+function ghValidTarget(c) {
+    if (!c || typeof c !== 'object') return false;
+    const seg = v => typeof v === 'string' && v.split('/').every(x => x && x !== '.' && x !== '..');
+    return typeof c.owner === 'string' && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(c.owner) &&
+        typeof c.repo === 'string' && /^[A-Za-z0-9._-]{1,100}$/.test(c.repo) && c.repo !== '.' && c.repo !== '..' &&
+        typeof c.path === 'string' && /^[A-Za-z0-9._\/-]{1,200}$/.test(c.path) && seg(c.path) &&
+        typeof c.branch === 'string' && /^[A-Za-z0-9._\/-]{1,100}$/.test(c.branch) && seg(c.branch);
+}
+
+function ghLoadConfig() {
+    try {
+        const c = JSON.parse(localStorage.getItem(GH_STORAGE_KEY) || 'null');
+        if (!ghValidTarget(c) || !c.tokenEnc || typeof c.tokenEnc.iv !== 'string' || typeof c.tokenEnc.data !== 'string' ||
+            !c.header || typeof c.header.salt !== 'string' || !parseArgon2Header(c.header.argon2)) return null;
+        return c;
+    } catch { return null; }
+}
+function ghStoreConfig(c) {
+    try { localStorage.setItem(GH_STORAGE_KEY, JSON.stringify(c)); return true; } catch { return false; }
+}
+function ghClearConfig() {
+    try { localStorage.removeItem(GH_STORAGE_KEY); } catch {}
+}
+function ghTargetLabel(c) { return `${c.owner}/${c.repo}/${c.path}`; }
+
+/** Шифруем токен текущим ключом хранилища и запоминаем открытую часть заголовка */
+async function ghSaveLocal() {
+    if (!ghSession || !masterKey) return false;
+    const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: GH_TOKEN_AAD }, masterKey, new TextEncoder().encode(ghSession.token));
+    const h = currentHeader();
+    return ghStoreConfig({
+        owner: ghSession.owner, repo: ghSession.repo, path: ghSession.path, branch: ghSession.branch,
+        tokenEnc: { iv: bufferToBase64(iv), data: bufferToBase64(ct) },
+        header: { salt: h.salt, argon2: h.argon2 }
+    });
+}
+
+async function ghDecryptToken(tokenEnc, key) {
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: base64ToBuffer(tokenEnc.iv), additionalData: GH_TOKEN_AAD }, key, base64ToBuffer(tokenEnc.data));
+    return new TextDecoder().decode(pt);
+}
+
+function ghError(code, status) { const e = new Error(code); e.code = code; e.status = status; return e; }
+
+function ghErrorText(e) {
+    switch (e && e.code) {
+        case 'NETWORK': return 'Нет связи с GitHub. Изменения пока только на этом устройстве.';
+        case 'AUTH': return 'Токен GitHub недействителен или истёк. Создайте новый и подключите заново.';
+        case 'NO_ACCESS': return 'Нет доступа к репозиторию: проверьте имя репозитория и права токена (Contents: Read and write).';
+        case 'CONFLICT': return 'Хранилище в GitHub изменено на другом устройстве — автосохранение остановлено.';
+        case 'BAD_FILE': return 'Файл в репозитории не похож на хранилище паролей.';
+        case 'TOO_LARGE': return 'Файл в репозитории слишком большой.';
+        default: return 'Ошибка GitHub' + (e && e.status ? ' (' + e.status + ')' : '') + '.';
+    }
+}
+
+async function ghFetch(sess, method, body) {
+    const url = `https://api.github.com/repos/${encodeURIComponent(sess.owner)}/${encodeURIComponent(sess.repo)}/contents/` +
+        sess.path.split('/').map(encodeURIComponent).join('/') +
+        (method === 'GET' ? '?ref=' + encodeURIComponent(sess.branch) : '');
+    const opts = {
+        method,
+        cache: 'no-store', // иначе браузер может отдать устаревшую версию из кэша
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer',
+        headers: { 'Accept': 'application/vnd.github+json', 'Authorization': 'Bearer ' + sess.token }
+    };
+    if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+    try { return await fetch(url, opts); } catch { throw ghError('NETWORK'); }
+}
+
+/** Скачать хранилище. null — файла ещё нет */
+async function ghGet(sess) {
+    const res = await ghFetch(sess, 'GET');
+    if (res.status === 404) {
+        // 404 бывает и когда нет файла, и когда нет доступа к репозиторию: различаем по самому репозиторию
+        return null;
+    }
+    if (res.status === 401) throw ghError('AUTH', 401);
+    if (res.status === 403) throw ghError('NO_ACCESS', 403);
+    if (!res.ok) throw ghError('HTTP', res.status);
+    const j = await res.json();
+    if (!j || j.type !== 'file' || typeof j.sha !== 'string') throw ghError('BAD_FILE');
+    if (typeof j.content !== 'string' || j.encoding !== 'base64' || !j.content) throw ghError('TOO_LARGE');
+    let parsed;
+    try { parsed = JSON.parse(new TextDecoder().decode(base64ToBuffer(j.content.replace(/\s/g, '')))); }
+    catch { throw ghError('BAD_FILE'); }
+    return { sha: j.sha, json: parsed };
+}
+
+/** Проверка, что репозиторий существует и токен его видит (для понятной ошибки при 404) */
+async function ghCheckRepo(sess) {
+    let res;
+    try {
+        res = await fetch(`https://api.github.com/repos/${encodeURIComponent(sess.owner)}/${encodeURIComponent(sess.repo)}`, {
+            cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer',
+            headers: { 'Accept': 'application/vnd.github+json', 'Authorization': 'Bearer ' + sess.token }
+        });
+    } catch { throw ghError('NETWORK'); }
+    if (res.status === 401) throw ghError('AUTH', 401);
+    if (res.status === 403 || res.status === 404) throw ghError('NO_ACCESS', res.status);
+    if (!res.ok) throw ghError('HTTP', res.status);
+    const j = await res.json();
+    return { isPrivate: !!(j && j.private) };
+}
+
+/** Записать хранилище. Возвращает новый sha. При чужом изменении — CONFLICT */
+async function ghPut(sess, text, sha) {
+    const body = { message: GH_COMMIT_MESSAGE, content: bufferToBase64(new TextEncoder().encode(text)), branch: sess.branch };
+    if (sha) body.sha = sha;
+    const res = await ghFetch(sess, 'PUT', body);
+    if (res.status === 409 || res.status === 422) throw ghError('CONFLICT', res.status);
+    if (res.status === 401) throw ghError('AUTH', 401);
+    if (res.status === 403 || res.status === 404) throw ghError('NO_ACCESS', res.status);
+    if (!res.ok) throw ghError('HTTP', res.status);
+    const j = await res.json();
+    if (!j || !j.content || typeof j.content.sha !== 'string') throw ghError('HTTP', res.status);
+    return j.content.sha;
+}
+
+/* ---------- статус синхронизации на странице ---------- */
+function setSyncState(state, err) {
+    const el = document.getElementById('sync-status');
+    const banner = document.getElementById('sync-banner');
+    if (!el || !banner) return;
+    el.hidden = !state;
+    el.disabled = state !== 'error';
+    el.dataset.state = state || '';
+    el.textContent = state === 'ok' ? '☁️ Сохранено в GitHub'
+        : state === 'saving' ? '⏳ Сохранение в GitHub…'
+        : state === 'error' ? '⚠️ Не сохранено — повторить'
+        : state === 'conflict' ? '⚠️ Конфликт версий' : '';
+    el.title = err ? ghErrorText(err) : '';
+    banner.classList.toggle('visible', state === 'conflict');
+}
+
+function updateGhLoginButton() {
+    const btn = document.getElementById('btn-open-github');
+    const info = document.getElementById('gh-login-info');
+    const cfg = ghLoadConfig();
+    btn.hidden = !cfg;
+    info.hidden = !cfg;
+    info.textContent = cfg ? 'GitHub: ' + ghTargetLabel(cfg) : '';
+    const fileBtn = document.getElementById('btn-open-file');
+    fileBtn.className = (cfg ? 'btn-secondary' : 'btn-primary') + ' btn-full';
+    btn.disabled = fileBtn.disabled; // если Argon2id не загрузился — блокируем всё одинаково
+    const hint = document.getElementById('login-hint');
+    if (!fileBtn.disabled) { // не перетираем сообщение об ошибке загрузки Argon2id
+        if (!hint.dataset.orig) hint.dataset.orig = hint.textContent;
+        hint.textContent = cfg ? 'Изменения сохраняются в GitHub автоматически, на любом устройстве.' : hint.dataset.orig;
+    }
+}
+
+function openFromGitHub() {
+    if (!ghLoadConfig()) { updateGhLoginButton(); return; }
+    pendingImportPayload = { github: true };
+    importModalMode = 'github';
+    prepareImportModal(null);
+    document.getElementById('import-modal-title').textContent = 'Введите мастер-пароль';
+    document.getElementById('import-modal-desc').textContent = 'Хранилище будет загружено из GitHub: ' + ghTargetLabel(ghLoadConfig());
+}
+
+/** Шаг открытия из GitHub: один Argon2id → расшифровка токена → загрузка файла. null — ошибка уже показана */
+async function ghOpenRemote(pwd) {
+    const cfg = ghLoadConfig();
+    if (!cfg) { showToast('Настройки GitHub не найдены', true); return null; }
+    const params = parseArgon2Header(cfg.header.argon2);
+    showBusy('Вычисление ключа…');
+    let key, token;
+    try {
+        key = await deriveKeyArgon2(pwd, base64ToBuffer(cfg.header.salt), params);
+        token = await ghDecryptToken(cfg.tokenEnc, key);
+    } catch {
+        hideBusy();
+        showToast('Неверный мастер-пароль. Если вы меняли его на другом устройстве — откройте файл вручную и подключите GitHub заново.', true);
+        return null;
+    }
+    const session = { owner: cfg.owner, repo: cfg.repo, path: cfg.path, branch: cfg.branch, token, sha: null };
+    showBusy('Загрузка из GitHub…');
+    let remote;
+    try { remote = await ghGet(session); }
+    catch (e) { hideBusy(); showToast(ghErrorText(e), true); return null; }
+    if (!remote) { hideBusy(); showToast('В репозитории нет файла хранилища: ' + ghTargetLabel(cfg), true); return null; }
+    const pl = remote.json;
+    if (!pl || typeof pl !== 'object' || !pl.salt || !pl.iv || !pl.data) { hideBusy(); showToast(ghErrorText(ghError('BAD_FILE')), true); return null; }
+    session.sha = remote.sha;
+    return { payload: pl, session, prefetch: { key, saltB64: cfg.header.salt, params } };
+}
+
+/* ---------- окно «Синхронизация с GitHub» ---------- */
+function openGitHubModal() {
+    closeSettings();
+    const cfg = ghLoadConfig();
+    const connected = !!ghSession;
+    document.getElementById('gh-connected').hidden = !connected;
+    document.getElementById('gh-form').hidden = connected;
+    document.getElementById('btn-gh-connect').hidden = connected;
+    document.getElementById('gh-connected-target').textContent = connected ? ghTargetLabel(ghSession) : '';
+    if (!connected) {
+        const src = cfg || {};
+        document.getElementById('gh-owner').value = src.owner || '';
+        document.getElementById('gh-repo').value = src.repo || 'vault-data';
+        document.getElementById('gh-path').value = src.path || 'passwords-vault.json';
+        document.getElementById('gh-branch').value = src.branch || 'main';
+    }
+    document.getElementById('gh-token').value = '';
+    openModalEl('github-modal', connected ? 'btn-github-close' : 'gh-owner');
+}
+
+function closeGitHubModal() {
+    closeModalEl('github-modal');
+    const t = document.getElementById('gh-token');
+    if (t) t.value = '';
+}
+
+const connectGitHub = exclusive(async function connectGitHub() {
+    if (!masterKey) return;
+    const target = {
+        owner: document.getElementById('gh-owner').value.trim(),
+        repo: document.getElementById('gh-repo').value.trim(),
+        path: document.getElementById('gh-path').value.trim().replace(/^\/+/, ''),
+        branch: document.getElementById('gh-branch').value.trim()
+    };
+    const token = document.getElementById('gh-token').value.trim();
+    if (!ghValidTarget(target)) { showToast('Проверьте владельца, репозиторий, путь и ветку', true); return; }
+    if (!/^[\x21-\x7e]{20,255}$/.test(token)) { showToast('Вставьте токен GitHub целиком', true); return; }
+    const sess = { ...target, token, sha: null };
+    const epoch = lockEpoch;
+    showBusy('Проверка доступа к GitHub…');
+    let remote;
+    try {
+        const repoInfo = await ghCheckRepo(sess);
+        if (!repoInfo.isPrivate) {
+            hideBusy();
+            showToast('Репозиторий публичный. Хранилище можно класть только в ПРИВАТНЫЙ репозиторий.', true);
+            return;
+        }
+        remote = await ghGet(sess);
+    } catch (e) { hideBusy(); showToast(ghErrorText(e), true); return; }
+    hideBusy();
+    if (epoch !== lockEpoch || !masterKey) return;
+    if (remote) {
+        if (!confirm('В репозитории уже есть файл хранилища.\n\nЗаменить его хранилищем, открытым сейчас? Старая версия останется в истории коммитов GitHub.\n\n' +
+            'Если хотите работать с версией из GitHub — нажмите «Отмена», заблокируйте и выберите «Открыть из GitHub».')) return;
+        sess.sha = remote.sha;
+    }
+    const prevSession = ghSession, prevHandle = vaultFileHandle;
+    ghSession = sess;
+    vaultFileHandle = null;
+    showBusy('Сохранение в GitHub…');
+    const ok = await persist();
+    hideBusy();
+    if (!ok) {
+        ghSession = prevSession; vaultFileHandle = prevHandle;
+        setSyncState(prevSession ? 'ok' : '');
+        showToast(ghErrorText(lastSyncError), true);
+        return;
+    }
+    const stored = await ghSaveLocal();
+    document.getElementById('file-name-display').textContent = '☁️ ' + ghTargetLabel(sess);
+    document.getElementById('fallback-banner').classList.remove('visible');
+    closeGitHubModal();
+    showToast(stored ? 'Синхронизация с GitHub включена' : 'Подключено, но браузер не сохранил настройки (приватный режим?) — после закрытия вкладки подключите снова', !stored);
+});
+
+const disconnectGitHub = exclusive(async function disconnectGitHub() {
+    if (!confirm('Отключить GitHub на этом устройстве?\n\nТокен будет удалён из браузера. Файл в репозитории останется как есть. ' +
+        'Текущие изменения перестанут сохраняться автоматически — скачайте копию хранилища.')) return;
+    ghClearConfig();
+    ghSession = null;
+    setSyncState('');
+    document.getElementById('file-name-display').textContent = 'открыт локально';
+    document.getElementById('fallback-banner').classList.add('visible');
+    closeGitHubModal();
+    showToast('GitHub отключён на этом устройстве');
+});
+
+/** Конфликт: перезаписать GitHub версией с этого устройства (чужая версия остаётся в истории коммитов) */
+const ghOverwrite = exclusive(async function ghOverwrite() {
+    if (!ghSession || !masterKey) return;
+    if (!confirm('Заменить версию в GitHub версией с этого устройства?\n\nИзменения с другого устройства не потеряются окончательно — они останутся в истории коммитов репозитория.')) return;
+    const sess = ghSession;
+    try {
+        const remote = await ghGet(sess);
+        sess.sha = remote ? remote.sha : null;
+    } catch (e) { showToast(ghErrorText(e), true); return; }
+    const ok = await persist();
+    notifySaved(ok, 'Версия с этого устройства сохранена в GitHub');
+});
+
+/* ---------- окно «Категории» ---------- */
+function fillIconSelect(sel, selected) {
+    sel.innerHTML = '';
+    const icons = (!selected || CATEGORY_ICONS.includes(selected)) ? CATEGORY_ICONS : [selected, ...CATEGORY_ICONS];
+    icons.forEach(i => {
+        const o = document.createElement('option');
+        o.value = i;
+        o.textContent = i;
+        sel.appendChild(o);
+    });
+    sel.value = selected || '📁';
+}
+
+function resetCategoryForm() {
+    catEditId = null;
+    document.getElementById('cat-name').value = '';
+    fillIconSelect(document.getElementById('cat-icon'), '📁');
+    document.getElementById('cat-form-label').textContent = 'Новая категория';
+    document.getElementById('cat-save').textContent = 'Добавить';
+    document.getElementById('cat-cancel').hidden = true;
+}
+
+function renderCategoriesList() {
+    const box = document.getElementById('categories-list');
+    box.innerHTML = '';
+    const counts = new Map();
+    entries.forEach(e => { const id = categoryOf(e); counts.set(id, (counts.get(id) || 0) + 1); });
+    orderedCategories().forEach(c => {
+        const n = counts.get(c.id) || 0;
+        const row = document.createElement('div');
+        row.className = 'cat-row';
+        const icon = document.createElement('span');
+        icon.className = 'cat-row-icon';
+        icon.textContent = c.icon;
+        icon.setAttribute('aria-hidden', 'true');
+        const info = document.createElement('div');
+        info.className = 'cat-row-info';
+        const name = document.createElement('span');
+        name.className = 'cat-row-name';
+        name.textContent = c.name;
+        const cnt = document.createElement('span');
+        cnt.className = 'cat-row-count';
+        cnt.textContent = `${n} ${pluralize(n, 'запись', 'записи', 'записей')}` + (c.id === FALLBACK_CATEGORY_ID ? ' · основная, не удаляется' : '');
+        info.appendChild(name);
+        info.appendChild(cnt);
+        const actions = document.createElement('div');
+        actions.className = 'cat-row-actions';
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'btn-secondary btn-small';
+        edit.dataset.action = 'cat-edit';
+        edit.dataset.id = c.id;
+        edit.textContent = 'Изменить';
+        edit.setAttribute('aria-label', 'Изменить категорию «' + c.name + '»');
+        actions.appendChild(edit);
+        if (c.id !== FALLBACK_CATEGORY_ID) {
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.className = 'btn-danger';
+            del.dataset.action = 'cat-delete';
+            del.dataset.id = c.id;
+            del.textContent = 'Удалить';
+            del.setAttribute('aria-label', 'Удалить категорию «' + c.name + '»');
+            actions.appendChild(del);
+        }
+        [icon, info, actions].forEach(n => row.appendChild(n));
+        box.appendChild(row);
+    });
+}
+
+function openCategories() {
+    resetCategoryForm();
+    renderCategoriesList();
+    openModalEl('categories-modal', 'cat-name');
+}
+
+function closeCategories() {
+    closeModalEl('categories-modal');
+    catEditId = null;
+    const box = document.getElementById('categories-list');
+    if (box) box.innerHTML = '';
+}
+
+function startEditCategory(id) {
+    const c = categoryById(id);
+    if (!c) return;
+    catEditId = id;
+    document.getElementById('cat-name').value = c.name;
+    fillIconSelect(document.getElementById('cat-icon'), c.icon);
+    document.getElementById('cat-form-label').textContent = 'Изменить категорию';
+    document.getElementById('cat-save').textContent = 'Сохранить';
+    document.getElementById('cat-cancel').hidden = false;
+    document.getElementById('cat-name').focus();
+}
+
+const saveCategory = exclusive(async function saveCategory() {
+    if (!masterKey) return;
+    const nameEl = document.getElementById('cat-name');
+    const err = validateCategoryName(nameEl.value, catEditId);
+    if (err) { showToast(err, true); nameEl.focus(); return; }
+    const icon = document.getElementById('cat-icon').value || '📁';
+    const name = nameEl.value.trim();
+    const editing = !!catEditId;
+    if (editing) {
+        const c = categoryById(catEditId);
+        if (!c) return;
+        c.name = name;
+        c.icon = icon;
+    } else {
+        categories.push({ id: newCategoryId(), name, icon });
+    }
+    const ok = await persist();
+    resetCategoryForm();
+    renderCategoriesList();
+    renderEntries();
+    notifySaved(ok, editing ? 'Категория обновлена' : 'Категория создана');
+});
+
+const deleteCategory = exclusive(async function deleteCategory(id) {
+    if (!masterKey || id === FALLBACK_CATEGORY_ID) return;
+    const c = categoryById(id);
+    if (!c) return;
+    const other = categoryById(FALLBACK_CATEGORY_ID);
+    const n = entries.filter(e => categoryOf(e) === id).length;
+    const msg = `Удалить категорию «${c.name}»?` +
+        (n ? `\n\n${n} ${pluralize(n, 'запись', 'записи', 'записей')} переедут в «${other ? other.name : 'Другое'}». Сами записи не удаляются.` : '');
+    if (!confirm(msg)) return;
+    // явно фиксируем «Другое», иначе записи без поля category вернулись бы в категорию по своему типу
+    entries.forEach(e => { if (categoryOf(e) === id) e.category = FALLBACK_CATEGORY_ID; });
+    trash.forEach(e => { if (e.category === id) e.category = FALLBACK_CATEGORY_ID; });
+    categories = categories.filter(x => x.id !== id);
+    collapsedCats.delete(id);
+    if (activeCat === id) activeCat = 'all';
+    if (catEditId === id) resetCategoryForm();
+    const ok = await persist();
+    renderCategoriesList();
+    renderEntries();
+    notifySaved(ok, 'Категория удалена');
+});
+
+/* ---------- выбор категории в форме записи ---------- */
+function fillCategorySelect(selectedId) {
+    const sel = document.getElementById('f-category');
+    sel.innerHTML = '';
+    orderedCategories().forEach(c => {
+        const o = document.createElement('option');
+        o.value = c.id;
+        o.textContent = c.icon + ' ' + c.name;
+        sel.appendChild(o);
+    });
+    const add = document.createElement('option');
+    add.value = NEW_CAT_VALUE;
+    add.textContent = '➕ Новая категория…';
+    sel.appendChild(add);
+    sel.value = categoryById(selectedId) ? selectedId : FALLBACK_CATEGORY_ID;
+    document.getElementById('f-newcat-block').hidden = true;
+    document.getElementById('f-newcat-name').value = '';
+    fillIconSelect(document.getElementById('f-newcat-icon'), '📁');
+}
+
+function defaultCategoryForType(typeId) {
+    const id = DEFAULT_CATEGORY_FOR_TYPE[typeId];
+    return categoryById(id) ? id : FALLBACK_CATEGORY_ID;
+}
+
+/* ---------- модалка «Подробности» (адрес, заметки, даты) ---------- */
+function fmtDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? '' : d.toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function openDetails(id) {
+    const e = entries.find(x => x.id === id);
+    if (!e) return;
+    const typeId = entryTypeId(e);
+    const meta = ENTRY_TYPES[typeId];
+    document.getElementById('details-title').textContent = e.title || 'Без названия';
+    const body = document.getElementById('details-body');
+    body.innerHTML = '';
+    const addRow = (label, valueNode, copyValue) => {
+        const row = document.createElement('div');
+        row.className = 'detail-row';
+        const l = document.createElement('div');
+        l.className = 'detail-label';
+        l.textContent = label;
+        const v = document.createElement('div');
+        v.className = 'detail-value';
+        v.appendChild(valueNode);
+        row.appendChild(l);
+        row.appendChild(v);
+        if (copyValue) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'copy-btn';
+            b.textContent = 'Копировать';
+            b.addEventListener('click', () => copyText(copyValue));
+            row.appendChild(b);
+        }
+        body.appendChild(row);
+    };
+    const badge = document.createElement('span');
+    badge.className = 'type-badge type-' + typeId;
+    badge.textContent = meta.label;
+    addRow('Тип записи', badge);
+    const cat = categoryById(categoryOf(e));
+    if (cat) addRow('Категория', document.createTextNode(cat.icon + ' ' + cat.name));
+    if (e.url) {
+        const safeHref = sanitizeUrl(e.url);
+        let node;
+        if (safeHref) {
+            node = document.createElement('a');
+            node.href = safeHref;
+            node.target = '_blank';
+            node.rel = 'noopener noreferrer';
+            node.textContent = e.url;
+        } else node = document.createTextNode(e.url);
+        addRow(meta.urlLabel, node, e.url);
+    }
+    if (e.notes) addRow('Заметки', document.createTextNode(e.notes), e.notes);
+    if (!e.url && !e.notes) {
+        const p = document.createElement('div');
+        p.className = 'detail-empty';
+        p.textContent = 'Адрес и заметки не указаны. Их можно добавить через меню ⋮ → «Изменить».';
+        body.appendChild(p);
+    }
+    const created = fmtDate(e.created);
+    const changed = fmtDate(e.passwordChangedAt);
+    if (created) addRow('Создано', document.createTextNode(created));
+    if (changed) addRow('Пароль изменён', document.createTextNode(changed));
+    openModalEl('details-modal', 'btn-details-close');
+}
+
+function closeDetails() {
+    closeModalEl('details-modal');
+    const body = document.getElementById('details-body');
+    if (body) body.innerHTML = '';
+}
+
+/* ---------- меню «⋮» ---------- */
+function closeMenus(focusBack) {
+    document.querySelectorAll('.entry-menu.open').forEach(m => {
+        m.classList.remove('open', 'up');
+        const l = m.querySelector('.menu-list');
+        if (l) l.hidden = true;
+        const t = m.querySelector('.menu-btn');
+        if (t) {
+            t.setAttribute('aria-expanded', 'false');
+            if (focusBack) t.focus({ preventScroll: true });
+        }
+    });
+}
+
+function toggleMenu(btn) {
+    const menu = btn.closest('.entry-menu');
+    if (!menu) return;
+    const wasOpen = menu.classList.contains('open');
+    closeMenus();
+    if (wasOpen) return;
+    const l = menu.querySelector('.menu-list');
+    l.hidden = false;
+    menu.classList.add('open');
+    btn.setAttribute('aria-expanded', 'true');
+    const r = l.getBoundingClientRect();
+    if (r.bottom > window.innerHeight - 8 && btn.getBoundingClientRect().top > r.height + 16) menu.classList.add('up');
+    const first = l.querySelector('[role="menuitem"]');
+    if (first) first.focus({ preventScroll: true });
+}
+
+function menuKeydown(ev) {
+    const menu = ev.target.closest('.entry-menu');
+    if (!menu || !menu.classList.contains('open')) return;
+    const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+    const i = items.indexOf(document.activeElement);
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); items[(i + 1) % items.length].focus({ preventScroll: true }); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); items[(i - 1 + items.length) % items.length].focus({ preventScroll: true }); }
+    else if (ev.key === 'Home') { ev.preventDefault(); items[0].focus({ preventScroll: true }); }
+    else if (ev.key === 'End') { ev.preventDefault(); items[items.length - 1].focus({ preventScroll: true }); }
+    else if (ev.key === 'Tab') closeMenus();
+}
+
+/* ---------- показать / скрыть значение (пароль, логин) ---------- */
+function clearRevealTimers() {
+    revealTimers.forEach(t => clearTimeout(t));
+    revealTimers.clear();
+}
+
+function hideSecret(el, btn) {
+    if (el) { el.textContent = MASK; el.classList.add('password-hidden'); }
+    if (btn) btn.textContent = 'Показать';
+}
+
+function toggleSecret(id, field, btn) {
+    const el = document.getElementById((field === 'login' ? 'login-' : 'pwd-') + id);
+    const entry = entries.find(e => e.id === id);
+    if (!entry || !el) return;
+    const key = field + ':' + id;
+    if (el.classList.contains('password-hidden')) {
+        if (field === 'password' && !confirm('Показать пароль на экране?')) return;
+        el.textContent = field === 'login' ? entry.login : entry.password;
+        el.classList.remove('password-hidden');
+        if (btn) btn.textContent = 'Скрыть';
+        clearTimeout(revealTimers.get(key));
+        revealTimers.set(key, setTimeout(() => { hideSecret(el, btn); revealTimers.delete(key); }, REVEAL_MS));
+    } else {
+        clearTimeout(revealTimers.get(key));
+        revealTimers.delete(key);
+        hideSecret(el, btn);
+    }
+}
+
+function togglePassword(id, btn) { toggleSecret(id, 'password', btn); }
+
+async function duplicateEntry(id) {
+    const src = entries.find(e => e.id === id);
+    if (!src) return;
+    const now = new Date().toISOString();
+    entries.push({
+        ...src,
+        id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2),
+        title: (src.title || 'Без названия') + ' (копия)',
+        created: now,
+        passwordChangedAt: now
+    });
+    const ok = await persist();
+    renderEntries();
+    notifySaved(ok, 'Запись продублирована');
+}
+
+document.getElementById('entries-list').addEventListener('click', (ev) => {
+    const btn = ev.target.closest('[data-action]');
+    if (!btn) return;
+    const id = btn.dataset.id;
+    const action = btn.dataset.action;
+    if (action !== 'menu-toggle') closeMenus(action === 'edit' || action === 'duplicate' || action === 'delete');
+    switch (action) {
+        case 'menu-toggle': toggleMenu(btn); break;
+        case 'edit': editEntry(id); break;
+        case 'duplicate': duplicateEntry(id); break;
+        case 'details': openDetails(id); break;
+        case 'add-to-cat': openModal(null, btn.dataset.cat); break;
+        case 'delete': deleteEntry(id); break;
+        case 'toggle-password': toggleSecret(id, 'password', btn); break;
+        case 'toggle-login': toggleSecret(id, 'login', btn); break;
+        case 'toggle-cat': {
+            const cat = btn.dataset.cat;
+            const grid = btn.nextElementSibling;
+            const willCollapse = btn.getAttribute('aria-expanded') === 'true';
+            if (willCollapse) collapsedCats.add(cat); else collapsedCats.delete(cat);
+            btn.setAttribute('aria-expanded', String(!willCollapse));
+            if (grid) grid.hidden = willCollapse;
+            break;
+        }
+        case 'copy-login': {
+            const entry = entries.find(x => x.id === id);
+            if (entry) copyText(entry.login);
+            break;
+        }
+        case 'copy-password': {
+            const entry = entries.find(x => x.id === id);
+            if (entry) copyText(entry.password);
+            break;
+        }
+    }
+});
+document.getElementById('entries-list').addEventListener('keydown', menuKeydown);
+document.getElementById('btn-details-close').addEventListener('click', closeDetails);
+
+document.getElementById('cat-filter').addEventListener('click', (ev) => {
+    const chip = ev.target.closest('[data-action]');
+    if (!chip) return;
+    if (chip.dataset.action === 'new-category') { openCategories(); return; }
+    if (chip.dataset.action !== 'filter-cat') return;
+    activeCat = chip.dataset.cat;
+    renderEntries();
+});
+document.getElementById('btn-categories').addEventListener('click', openCategories);
+document.getElementById('btn-open-github').addEventListener('click', openFromGitHub);
+document.getElementById('btn-github').addEventListener('click', openGitHubModal);
+document.getElementById('btn-gh-connect').addEventListener('click', connectGitHub);
+document.getElementById('btn-gh-disconnect').addEventListener('click', disconnectGitHub);
+document.getElementById('btn-github-close').addEventListener('click', closeGitHubModal);
+document.getElementById('gh-token').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); connectGitHub(); } });
+document.getElementById('sync-status').addEventListener('click', () => { if (ghSession) persist().then(ok => notifySaved(ok, 'Сохранено в GitHub')); });
+document.getElementById('btn-sync-overwrite').addEventListener('click', ghOverwrite);
+document.getElementById('btn-sync-download').addEventListener('click', downloadCurrentVault);
+document.getElementById('btn-sync-lock').addEventListener('click', () => {
+    if (confirm('Заблокировать? Несохранённые изменения с этого устройства пропадут (скачайте копию, если они нужны). После разблокировки откроется свежая версия из GitHub.')) lock();
+});
+document.getElementById('categories-list').addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-action]');
+    if (!b) return;
+    if (b.dataset.action === 'cat-edit') startEditCategory(b.dataset.id);
+    else if (b.dataset.action === 'cat-delete') deleteCategory(b.dataset.id);
+});
+document.getElementById('cat-save').addEventListener('click', saveCategory);
+document.getElementById('cat-cancel').addEventListener('click', resetCategoryForm);
+document.getElementById('cat-name').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); saveCategory(); } });
+document.getElementById('btn-categories-close').addEventListener('click', closeCategories);
+document.getElementById('f-category').addEventListener('change', (ev) => {
+    catFollowType = false;
+    const isNew = ev.target.value === NEW_CAT_VALUE;
+    document.getElementById('f-newcat-block').hidden = !isNew;
+    if (isNew) document.getElementById('f-newcat-name').focus();
+});
+document.getElementById('f-newcat-name').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); saveEntry(); } });
+
+// клик вне меню закрывает его
+document.addEventListener('click', (ev) => {
+    if (!ev.target.closest('.entry-menu')) closeMenus();
+});
+window.addEventListener('resize', () => closeMenus());
+
+// «/» — быстрый переход к поиску
+document.addEventListener('keydown', (ev) => {
+    if (ev.key !== '/' || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    if (!masterKey || document.querySelector('.modal-overlay.active')) return;
+    const tag = (document.activeElement && document.activeElement.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    ev.preventDefault();
+    document.getElementById('search').focus();
+});
+
+function openModalEl(overlayId, focusId) {
+    lastFocusedBeforeModal = document.activeElement;
+    document.getElementById(overlayId).classList.add('active');
+    if (focusId) {
+        const el = document.getElementById(focusId);
+        if (el) setTimeout(() => el.focus(), 50);
+    }
+}
+
+function closeModalEl(overlayId) {
+    document.getElementById(overlayId).classList.remove('active');
+    if (lastFocusedBeforeModal && typeof lastFocusedBeforeModal.focus === 'function') {
+        try { lastFocusedBeforeModal.focus(); } catch (e) {}
+    }
+    lastFocusedBeforeModal = null;
+}
+
+function openModal(id = null, presetCat = null) {
+    editId = id;
+    document.getElementById('modal-title').textContent = id ? 'Редактировать' : 'Добавить запись';
+    if (id) {
+        const e = entries.find(x => x.id === id);
+        if (e) {
+            const typeId = e.type && ENTRY_TYPES[e.type] ? e.type : 'password';
+            document.getElementById('f-type').value = typeId;
+            applyEntryTypeUI(typeId);
+            document.getElementById('f-title').value = e.title || '';
+            document.getElementById('f-login').value = e.login || '';
+            document.getElementById('f-password').value = e.password || '';
+            document.getElementById('f-password').type = 'password';
+            document.getElementById('btn-toggle-f-password').textContent = 'Показать';
+            document.getElementById('f-url').value = e.url || '';
+            document.getElementById('f-notes').value = e.notes || '';
+            fillCategorySelect(categoryOf(e));
+            catFollowType = false;
+        }
+    } else {
+        document.getElementById('f-type').value = 'password';
+        applyEntryTypeUI('password');
+        ['f-title', 'f-login', 'f-password', 'f-url', 'f-notes'].forEach(i => {
+            document.getElementById(i).value = '';
+        });
+        document.getElementById('f-password').type = 'password';
+        document.getElementById('btn-toggle-f-password').textContent = 'Показать';
+        // категория: из пустой категории / активного фильтра, иначе — по типу записи
+        const preset = presetCat || (activeCat !== 'all' ? activeCat : null);
+        const usePreset = !!(preset && categoryById(preset));
+        fillCategorySelect(usePreset ? preset : defaultCategoryForType('password'));
+        catFollowType = !usePreset;
+    }
+    openModalEl('modal', 'f-type');
+}
+
+function closeModal() {
+    closeModalEl('modal');
+    editId = null;
+}
+
+const saveEntry = exclusive(async function saveEntry() {
+    const title = document.getElementById('f-title').value.trim();
+    if (!title) { showToast('Укажите название', true); return; }
+    const typeId = document.getElementById('f-type').value;
+    // категория: выбранная или новая; новая создаётся вместе с записью одним сохранением
+    let categoryId = document.getElementById('f-category').value;
+    let newCat = null;
+    if (categoryId === NEW_CAT_VALUE) {
+        const nameEl = document.getElementById('f-newcat-name');
+        const err = validateCategoryName(nameEl.value);
+        if (err) { showToast(err, true); nameEl.focus(); return; }
+        newCat = { id: newCategoryId(), name: nameEl.value.trim(), icon: document.getElementById('f-newcat-icon').value || '📁' };
+        categoryId = newCat.id;
+    } else if (!categoryById(categoryId)) {
+        categoryId = defaultCategoryForType(typeId);
+    }
+    const data = {
+        category: categoryId,
+        type: ENTRY_TYPES[typeId] ? typeId : 'password',
+        title,
+        login: document.getElementById('f-login').value.trim(),
+        password: document.getElementById('f-password').value,
+        url: document.getElementById('f-url').value.trim(),
+        notes: document.getElementById('f-notes').value.trim()
+    };
+    const wasEdit = !!editId;
+    if (editId) {
+        const idx = entries.findIndex(x => x.id === editId);
+        if (idx !== -1) {
+            const prev = entries[idx];
+            const passwordChanged = data.password !== prev.password;
+            entries[idx] = {
+                ...prev,
+                ...data,
+                passwordChangedAt: passwordChanged ? new Date().toISOString() : (prev.passwordChangedAt || prev.created)
+            };
+        }
+    } else {
+        const now = new Date().toISOString();
+        entries.push({
+            id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2),
+            ...data,
+            created: now,
+            passwordChangedAt: now
+        });
+    }
+    if (newCat) categories.push(newCat);
+    collapsedCats.delete(categoryId);                                    // запись не должна «пропасть» в свёрнутой категории
+    if (activeCat !== 'all' && activeCat !== categoryId) activeCat = 'all'; // и в отфильтрованном списке
+    const ok = await persist();
+    closeModal();
+    renderEntries();
+    notifySaved(ok, wasEdit ? 'Обновлено' : (newCat ? `Добавлено в новую категорию «${newCat.name}»` : 'Добавлено'));
+});
+
+function editEntry(id) { openModal(id); }
+
+async function deleteEntry(id) {
+    if (!confirm('Переместить запись в корзину?')) return;
+    const idx = entries.findIndex(e => e.id === id);
+    if (idx === -1) return;
+    const [removed] = entries.splice(idx, 1);
+    removed.deletedAt = new Date().toISOString();
+    trash.push(removed);
+    const ok = await persist();
+    renderEntries();
+    updateTrashBadge();
+    notifySaved(ok, 'Перемещено в корзину');
+}
+
+function updateTrashBadge() {
+    const btn = document.getElementById('trash-btn');
+    if (btn) btn.textContent = `🗑️ Корзина${trash.length ? ' (' + trash.length + ')' : ''}`;
+}
+
+function openTrash() {
+    renderTrash();
+    openModalEl('trash-modal');
+}
+function closeTrash() { closeModalEl('trash-modal'); }
+
+function renderTrash() {
+    const list = document.getElementById('trash-list');
+    list.innerHTML = '';
+    if (trash.length === 0) {
+        const p = document.createElement('p');
+        p.style.cssText = 'color:var(--muted); text-align:center; padding:28px 0;';
+        p.textContent = 'Корзина пуста';
+        list.appendChild(p);
+        document.getElementById('empty-trash-btn').style.display = 'none';
+        return;
+    }
+    document.getElementById('empty-trash-btn').style.display = 'inline-flex';
+    trash.slice().reverse().forEach(e => {
+        const row = document.createElement('div');
+        row.className = 'entry';
+        const header = document.createElement('div');
+        header.className = 'entry-header';
+        const title = document.createElement('div');
+        title.className = 'entry-title';
+        title.textContent = e.title || 'Без названия';
+        header.appendChild(title);
+        const actions = document.createElement('div');
+        actions.className = 'entry-actions';
+        const restoreBtn = document.createElement('button');
+        restoreBtn.className = 'btn-secondary btn-small';
+        restoreBtn.type = 'button';
+        restoreBtn.textContent = 'Восстановить';
+        restoreBtn.addEventListener('click', () => restoreEntry(e.id));
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn-danger';
+        delBtn.type = 'button';
+        delBtn.textContent = 'Удалить навсегда';
+        delBtn.addEventListener('click', () => deleteForever(e.id));
+        actions.appendChild(restoreBtn);
+        actions.appendChild(delBtn);
+        header.appendChild(actions);
+        row.appendChild(header);
+        if (e.deletedAt) {
+            const meta = document.createElement('div');
+            meta.style.cssText = 'font-size:0.8rem; color:var(--muted);';
+            meta.textContent = 'Удалено: ' + new Date(e.deletedAt).toLocaleString('ru');
+            row.appendChild(meta);
+        }
+        list.appendChild(row);
+    });
+}
+
+async function restoreEntry(id) {
+    const idx = trash.findIndex(e => e.id === id);
+    if (idx === -1) return;
+    const [restored] = trash.splice(idx, 1);
+    delete restored.deletedAt;
+    entries.push(restored);
+    const ok = await persist();
+    renderEntries();
+    renderTrash();
+    updateTrashBadge();
+    notifySaved(ok, 'Запись восстановлена');
+}
+
+async function deleteForever(id) {
+    if (!confirm('Удалить запись навсегда? Это необратимо.')) return;
+    trash = trash.filter(e => e.id !== id);
+    const ok = await persist();
+    renderTrash();
+    updateTrashBadge();
+    notifySaved(ok, 'Удалено навсегда');
+}
+
+async function emptyTrash() {
+    if (trash.length === 0) return;
+    if (!confirm(`Удалить навсегда все записи из корзины (${trash.length})? Это необратимо.`)) return;
+    trash = [];
+    const ok = await persist();
+    renderTrash();
+    updateTrashBadge();
+    notifySaved(ok, 'Корзина очищена');
+}
+
+function computeHealthReport() {
+    const weak = [], stale = [];
+    const byPassword = new Map();
+    const now = Date.now();
+    entries.forEach(e => {
+        if (!e.password) return;
+        const s = checkStrength(e.password);
+        if (s.text === 'Очень слабый' || s.text === 'Слабый') weak.push({ entry: e, s });
+        if (!byPassword.has(e.password)) byPassword.set(e.password, []);
+        byPassword.get(e.password).push(e);
+        const changedAt = e.passwordChangedAt || e.created;
+        if (changedAt) {
+            const days = Math.floor((now - new Date(changedAt).getTime()) / 86400000);
+            if (days > 365) stale.push({ entry: e, days });
+        }
+    });
+    const reused = [...byPassword.values()].filter(g => g.length > 1);
+    return { weak, reused, stale };
+}
+
+function healthSectionRow(entry, reasonText) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:10px 14px; padding:14px 0; border-bottom:1px solid var(--border);';
+    const left = document.createElement('div');
+    left.style.cssText = 'flex:1 1 220px; min-width:0;';
+    const title = document.createElement('div');
+    title.style.fontWeight = '600';
+    title.textContent = entry.title || 'Без названия';
+    const reason = document.createElement('div');
+    reason.style.cssText = 'font-size:0.8rem; color:var(--muted);';
+    reason.textContent = reasonText;
+    left.appendChild(title);
+    left.appendChild(reason);
+    const btn = document.createElement('button');
+    btn.className = 'btn-secondary btn-small';
+    btn.type = 'button';
+    btn.textContent = 'Открыть';
+    btn.addEventListener('click', () => { closeHealthReport(); openModal(entry.id); });
+    row.appendChild(left);
+    row.appendChild(btn);
+    return row;
+}
+
+function renderHealthReport() {
+    const body = document.getElementById('health-body');
+    body.innerHTML = '';
+    const { weak, reused, stale } = computeHealthReport();
+    if (weak.length === 0 && reused.length === 0 && stale.length === 0) {
+        const ok = document.createElement('p');
+        ok.style.cssText = 'color:var(--success); padding:10px 0;';
+        ok.textContent = '✅ Явных проблем не найдено: слабых, повторяющихся или давно не менявшихся паролей нет.';
+        body.appendChild(ok);
+        return;
+    }
+    const addSection = (titleText, rows) => {
+        if (rows.length === 0) return;
+        const h = document.createElement('div');
+        h.style.cssText = 'font-weight:600; margin:14px 0 4px;';
+        h.textContent = `${titleText} (${rows.length})`;
+        body.appendChild(h);
+        rows.forEach(r => body.appendChild(r));
+    };
+    addSection('⚠️ Слабые пароли', weak.map(w => healthSectionRow(w.entry, 'Сила: ' + w.s.text)));
+    addSection('🔁 Повторяющиеся пароли', reused.flatMap(group =>
+        group.map(e => healthSectionRow(e, 'Такой же пароль ещё в ' + (group.length - 1) + ' записи(ях): ' + group.filter(x => x.id !== e.id).map(x => x.title).join(', ')))
+    ));
+    addSection('🕒 Давно не менялись', stale.map(w => healthSectionRow(w.entry, `Не менялся ${w.days} дн.`)));
+}
+
+function openHealthReport() { renderHealthReport(); openModalEl('health-modal'); }
+function closeHealthReport() { closeModalEl('health-modal'); }
+
+async function sha1Hex(str) {
+    const bytes = new TextEncoder().encode(str);
+    const hashBuf = await crypto.subtle.digest('SHA-1', bytes);
+    return [...new Uint8Array(hashBuf)].map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+
+async function checkHIBP() {
+    if (entries.every(e => !e.password)) { showToast('Нет паролей для проверки', true); return; }
+    if (!confirm('Будут отправлены первые 5 символов SHA-1 хэша каждого пароля на api.pwnedpasswords.com (k-anonymity). Продолжить?')) return;
+    const epoch = lockEpoch;
+    const btn = document.getElementById('hibp-btn');
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Проверка...';
+    const breached = [];
+    let failedPrefixes = 0;
+    try {
+        const uniquePasswords = new Map();
+        for (const e of entries) {
+            if (!e.password) continue;
+            if (!uniquePasswords.has(e.password)) uniquePasswords.set(e.password, []);
+            uniquePasswords.get(e.password).push(e);
+        }
+        const byPrefix = new Map();
+        for (const [pwd, ents] of uniquePasswords) {
+            const hash = await sha1Hex(pwd);
+            const prefix = hash.slice(0, 5);
+            if (!byPrefix.has(prefix)) byPrefix.set(prefix, []);
+            byPrefix.get(prefix).push({ suffix: hash.slice(5), entries: ents });
+        }
+        for (const [prefix, items] of byPrefix) {
+            if (epoch !== lockEpoch) return; // хранилище заблокировано — прекращаем
+            let text;
+            try {
+                const res = await fetch('https://api.pwnedpasswords.com/range/' + prefix, {
+                    headers: { 'Add-Padding': 'true' }
+                });
+                if (!res.ok) { failedPrefixes++; continue; }
+                text = await res.text();
+            } catch (err) { failedPrefixes++; continue; }
+            if (epoch !== lockEpoch) return;
+            const counts = new Map();
+            for (const line of text.split('\n')) {
+                const [suf, cnt] = line.trim().split(':');
+                if (suf) counts.set(suf.toUpperCase(), parseInt(cnt || '0', 10));
+            }
+            for (const item of items) {
+                const count = counts.get(item.suffix) || 0; // count=0 — это padding, не утечка
+                if (count > 0) item.entries.forEach(e => breached.push({ entry: e, count }));
+            }
+        }
+        if (epoch !== lockEpoch) return;
+
+        const body = document.getElementById('health-body');
+        const old = document.getElementById('hibp-results');
+        if (old) old.remove(); // повторный запуск не дублирует блок
+        const box = document.createElement('div');
+        box.id = 'hibp-results';
+        const h = document.createElement('div');
+        h.style.cssText = 'font-weight:600; margin:14px 0 4px;';
+        if (breached.length === 0 && failedPrefixes === 0) {
+            h.style.color = 'var(--success)';
+            h.textContent = '✅ HIBP: ни один пароль не найден в известных утечках';
+            box.appendChild(h);
+        } else {
+            if (breached.length > 0) {
+                h.textContent = `🚨 Найдены в утечках (${breached.length})`;
+                box.appendChild(h);
+                breached.forEach(b => box.appendChild(
+                    healthSectionRow(b.entry, `Встречается в утечках ${b.count.toLocaleString('ru')} раз — смените пароль`)
+                ));
+            }
+            if (failedPrefixes > 0) {
+                const w = document.createElement('div');
+                w.style.cssText = 'margin:10px 0; color:var(--warning, #eab308);';
+                w.textContent = `⚠️ Проверка неполная: не удалось запросить ${failedPrefixes} из ${byPrefix.size} групп. Повторите позже.`;
+                box.appendChild(w);
+            }
+        }
+        body.appendChild(box);
+    } catch (e) {
+        if (epoch === lockEpoch) showToast('Не удалось выполнить проверку (нет сети?)', true);
+        console.error(e);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
+}
+
+/** Равномерное целое 0..max-1 (rejection sampling, без modulo bias) */
+function randomInt(max) {
+    const limit = Math.floor(0x100000000 / max) * max;
+    const arr = new Uint32Array(1);
+    let v;
+    do { crypto.getRandomValues(arr); v = arr[0]; } while (v >= limit);
+    return v % max;
+}
+
+function generatePassword() {
+    const length = Math.max(12, Math.min(64, parseInt(document.getElementById('gen-length').value, 10) || 20));
+    document.getElementById('gen-length').value = length;
+    const noSpecial = document.getElementById('gen-no-special').checked;
+    const classes = [
+        'abcdefghijklmnopqrstuvwxyz',
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+        '0123456789'
+    ];
+    if (!noSpecial) classes.push('!@#$%^&*()-_=+[]{}');
+    const all = classes.join('');
+    // по одному символу из каждого класса гарантированно, остальное — из общего набора
+    const out = classes.map(c => c[randomInt(c.length)]);
+    while (out.length < length) out.push(all[randomInt(all.length)]);
+    // тасуем (Fisher–Yates), чтобы обязательные символы не стояли в начале
+    for (let i = out.length - 1; i > 0; i--) {
+        const j = randomInt(i + 1);
+        [out[i], out[j]] = [out[j], out[i]];
+    }
+    document.getElementById('f-password').value = out.join('');
+    document.getElementById('f-password').type = 'text';
+    document.getElementById('btn-toggle-f-password').textContent = 'Скрыть';
+}
+
+async function copyText(text) {
+    if (!text) return;
+    try {
+        await navigator.clipboard.writeText(text);
+        clipboardDirty = true;
+        showToast('Скопировано');
+        scheduleClipboardClear();
+    } catch {
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            clipboardDirty = true;
+            showToast('Скопировано');
+            scheduleClipboardClear();
+        } catch {
+            showToast('Не удалось скопировать', true);
+        }
+    }
+}
+
+function showToast(msg, isError = false) {
+    const t = document.getElementById('toast');
+    if (toastTimer) clearTimeout(toastTimer);
+    t.textContent = msg;
+    t.className = 'toast show' + (isError ? ' error' : '');
+    toastTimer = setTimeout(() => {
+        t.classList.remove('show');
+        toastTimer = null;
+    }, 2500);
+}
+
+async function exportEncrypted() {
+    if (!masterKey || !vaultSaltB64) return;
+    try {
+        const header = currentHeader();
+        const aad = serializeHeaderForAAD(header);
+        const payload = await encryptWithKey(vaultData(), masterKey, aad);
+        const out = {
+            ...header,
+            ...payload,
+            exportedAt: new Date().toISOString(),
+            note: 'Зашифрованный бэкап. Нужен ваш мастер-пароль.'
+        };
+        downloadJson(out, `passwords-backup-${new Date().toISOString().slice(0, 10)}.json`);
+        showToast('Экспорт готов');
+    } catch (e) {
+        showToast('Ошибка экспорта', true);
+        console.error(e);
+    }
+}
+
+function importEncrypted(event) {
+    const file = event.target.files[0];
+    event.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const payload = JSON.parse(e.target.result);
+            if (!payload.salt || !payload.iv || !payload.data) {
+                showToast('Неверный формат файла', true);
+                return;
+            }
+            pendingImportPayload = payload;
+            importModalMode = 'import';
+            prepareImportModal(payload);
+        } catch (err) {
+            showToast('Ошибка чтения файла', true);
+        }
+    };
+    reader.readAsText(file);
+}
+
+function closeImportPasswordModal() {
+    closeModalEl('import-password-modal');
+    pendingImportPayload = null;
+    importModalMode = 'import';
+}
+
+const confirmImportPassword = exclusive(async function confirmImportPassword() {
+    if (!pendingImportPayload) { closeImportPasswordModal(); return; }
+    const pwd = document.getElementById('import-password-input').value;
+    if (!pwd) { showToast('Введите пароль', true); return; }
+
+    let payload = pendingImportPayload;
+    let mode = importModalMode;
+    const epoch = lockEpoch;
+    let ghRemote = null;
+    if (mode === 'github') {
+        ghRemote = await ghOpenRemote(pwd);
+        if (!ghRemote || epoch !== lockEpoch) { hideBusy(); return; }
+        payload = ghRemote.payload;
+        mode = 'open';
+        vaultFileHandle = null;
+    }
+
+    let salt;
+    try {
+        salt = base64ToBuffer(payload.salt);
+        base64ToBuffer(payload.iv);
+        base64ToBuffer(payload.data);
+    } catch {
+        showToast('Повреждённый или неверный формат данных', true);
+        return;
+    }
+
+    try {
+        let key;
+        let isLegacy = false;
+        let aadBytes = null;
+        let argonParams = null; // локально: глобальное состояние трогаем только после успеха
+
+        showBusy('Вычисление ключа…');
+
+        if (Number(payload.version) >= 3) {
+            if (Number(payload.version) !== 3 || payload.kdf !== 'Argon2id') {
+                hideBusy();
+                showToast('Неподдерживаемая версия или KDF файла', true);
+                return;
+            }
+            argonParams = parseArgon2Header(payload.argon2);
+            if (!argonParams) {
+                hideBusy();
+                showToast('Некорректные или слишком тяжёлые параметры Argon2id в файле', true);
+                return;
+            }
+            const pre = ghRemote && ghRemote.prefetch;
+            // при открытии из GitHub ключ уже выведен тем же паролем — второй Argon2id не нужен, если заголовок тот же
+            key = (pre && pre.saltB64 === payload.salt && pre.params.memorySize === argonParams.memorySize &&
+                   pre.params.iterations === argonParams.iterations && pre.params.parallelism === argonParams.parallelism)
+                ? pre.key
+                : await deriveKeyArgon2(pwd, salt, argonParams);
+            aadBytes = serializeHeaderForAAD({
+                version: payload.version,
+                kdf: 'Argon2id',
+                argon2: { memory: argonParams.memorySize, iterations: argonParams.iterations, parallelism: argonParams.parallelism },
+                salt: payload.salt
+            });
+        } else {
+            // Legacy v1/v2: PBKDF2, без AAD
+            isLegacy = true;
+            let iterations = PBKDF2_ITERATIONS;
+            if (payload.iterations !== undefined) {
+                iterations = Number(payload.iterations);
+                if (!Number.isInteger(iterations) || iterations < 1 || iterations > MAX_PBKDF2_ITERATIONS) {
+                    hideBusy();
+                    showToast('Некорректное число итераций PBKDF2 в файле', true);
+                    return;
+                }
+            }
+            key = await deriveKeyPbkdf2(pwd, salt, iterations);
+        }
+
+        let decrypted;
+        try {
+            decrypted = await decryptWithKey(payload, key, aadBytes);
+        } catch (decErr) {
+            hideBusy();
+            showToast('Не удалось расшифровать. Проверьте пароль.', true);
+            return;
+        }
+
+        if (decrypted === null || typeof decrypted !== 'object') {
+            hideBusy();
+            showToast('Повреждённый или неверный формат данных', true);
+            return;
+        }
+        let imported;
+        try {
+            imported = normalizeVaultData(decrypted);
+        } catch {
+            hideBusy();
+            showToast('Повреждённый или неверный формат данных', true);
+            return;
+        }
+
+        if (mode === 'open') {
+            let newKey = key, newSaltB64 = payload.salt, newArgon = argonParams;
+            if (isLegacy) {
+                // Миграция legacy → Argon2id: предупреждаем, делаем копию, перевыводим ключ тем же паролем
+                hideBusy();
+                const okMigrate = confirm(
+                    'Это хранилище в старом формате (PBKDF2). Оно будет автоматически переписано в новый формат Argon2id, ' +
+                    'и старые версии страницы его больше не откроют.\n\n' +
+                    'Перед этим будет скачана резервная копия исходного файла. Продолжить?'
+                );
+                if (!okMigrate) {
+                    closeImportPasswordModal();
+                    vaultFileHandle = null;
+                    showToast('Открытие отменено');
+                    return;
+                }
+                downloadJson(payload, `passwords-vault-backup-v${Number(payload.version) || 1}-${new Date().toISOString().slice(0, 10)}.json`);
+                showBusy('Миграция на Argon2id…');
+                const newSalt = crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
+                newArgon = { ...DEFAULT_ARGON2 };
+                newKey = await deriveKeyArgon2(pwd, newSalt, newArgon);
+                newSaltB64 = bufferToBase64(newSalt);
+            }
+            masterKey = newKey;
+            vaultSaltB64 = newSaltB64;
+            vaultArgon2 = newArgon;
+            entries = imported.entries;
+            trash = imported.trash;
+            categories = imported.categories || defaultCategories();
+            vaultDirty = false;
+            ghSession = ghRemote ? ghRemote.session : null;
+            document.getElementById('file-name-display').textContent = ghSession ? '☁️ ' + ghTargetLabel(ghSession) :
+                (vaultFileHandle ? vaultFileHandle.name : (fallbackMode ? 'открыт через файл' : ''));
+            closeImportPasswordModal();
+            showApp();
+            if (ghSession) await ghSaveLocal(); // обновить зашифрованный токен, если соль/пароль сменились
+            if (isLegacy) {
+                const ok = await persist(); // записываем уже в Argon2id
+                hideBusy();
+                if (masterKey) {
+                    if (ok) showToast('Хранилище открыто и мигрировано на Argon2id');
+                    else showToast('Хранилище открыто, но записать миграцию не удалось — старый файл не тронут', true);
+                }
+            } else {
+                hideBusy();
+                showToast('Хранилище открыто');
+            }
+        } else {
+            // Импорт бэкапа в уже открытое хранилище: ключ/параметры/соль текущего хранилища НЕ меняются
+            hideBusy();
+            if (!masterKey || epoch !== lockEpoch) return; // заблокировали во время вычисления
+            if (!confirm(`Импортировать ${imported.entries.length} записей? Текущие данные будут заменены.`)) {
+                closeImportPasswordModal();
+                return;
+            }
+            entries = imported.entries;
+            trash = imported.trash;
+            if (imported.categories) categories = imported.categories; // в старом бэкапе категорий нет — текущие остаются
+            const ok = await persist();
+            renderEntries();
+            updateTrashBadge();
+            notifySaved(ok, 'Импорт выполнен');
+            closeImportPasswordModal();
+        }
+    } catch (e) {
+        hideBusy();
+        console.error(e);
+        showToast('Не удалось расшифровать. Проверьте пароль.', true);
+    }
+});
+
+function openChangePassword() {
+    closeSettings();
+    document.getElementById('cp-current').value = '';
+    document.getElementById('cp-new').value = '';
+    document.getElementById('cp-new-confirm').value = '';
+    document.getElementById('cp-strength-fill').style.width = '0%';
+    document.getElementById('cp-strength-text').textContent = '';
+    openModalEl('change-password-modal', 'cp-current');
+}
+function closeChangePassword() { closeModalEl('change-password-modal'); }
+
+const changeMasterPassword = exclusive(async function changeMasterPassword() {
+    const current = document.getElementById('cp-current').value;
+    const next = document.getElementById('cp-new').value;
+    const nextConfirm = document.getElementById('cp-new-confirm').value;
+    if (!masterKey || !vaultSaltB64) return;
+    if (!current || !next) { showToast('Заполните все поля', true); return; }
+    if (next !== nextConfirm) { showToast('Новые пароли не совпадают', true); return; }
+    if (!isStrongEnough(next)) {
+        showToast('Минимум 9 символов: строчные, заглавные, цифра, спецсимвол, не менее 8 уникальных', true);
+        return;
+    }
+    const epoch = lockEpoch;
+
+    // 1. Проверка текущего пароля по реальным данным: шифруем текущее содержимое действующим ключом
+    //    и пробуем расшифровать ключом, выведенным из введённого пароля (тот же заголовок и AAD).
+    showBusy('Проверка текущего пароля…');
+    try {
+        const header = currentHeader();
+        const aad = serializeHeaderForAAD(header);
+        const probe = await encryptWithKey(vaultData(), masterKey, aad);
+        const currentKey = await deriveKeyArgon2(current, base64ToBuffer(vaultSaltB64), vaultArgon2);
+        await decryptWithKey(probe, currentKey, aad);
+    } catch {
+        hideBusy();
+        showToast('Текущий пароль неверен', true);
+        return;
+    }
+    if (epoch !== lockEpoch) { hideBusy(); return; }
+
+    // 2. Новый ключ: те же параметры Argon2id из заголовка, новые salt и iv
+    const prev = { key: masterKey, salt: vaultSaltB64, argon: vaultArgon2 };
+    try {
+        showBusy('Вычисление нового ключа (Argon2id)…');
+        const newSalt = crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
+        const params = { ...vaultArgon2 };
+        const newKey = await deriveKeyArgon2(next, newSalt, params);
+        if (epoch !== lockEpoch) { hideBusy(); return; }
+        masterKey = newKey;
+        vaultSaltB64 = bufferToBase64(newSalt);
+        vaultArgon2 = params;
+        const ok = await persist();
+        if (masterKey !== newKey) { hideBusy(); return; } // заблокировали во время записи
+        if (!ok) {
+            // файл остался со старым паролем — не оставляем память в рассинхроне
+            masterKey = prev.key; vaultSaltB64 = prev.salt; vaultArgon2 = prev.argon;
+            hideBusy();
+            showToast('Не удалось записать файл — мастер-пароль НЕ изменён', true);
+            return;
+        }
+        if (ghSession) await ghSaveLocal(); // токен перешифровывается новым ключом
+        hideBusy();
+        closeChangePassword();
+        showToast('Мастер-пароль изменён');
+    } catch (e) {
+        hideBusy();
+        showToast('Ошибка смены пароля', true);
+        console.error(e);
+    }
+});
+
+function openSettings() {
+    document.getElementById('lock-timeout').value = settings.lockTimeout;
+    document.getElementById('clipboard-timeout').value = settings.clipboardTimeout;
+    openModalEl('settings-modal', 'lock-timeout');
+}
+function closeSettings() { closeModalEl('settings-modal'); }
+function saveSettings() {
+    settings = {
+        lockTimeout: parseInt(document.getElementById('lock-timeout').value, 10),
+        clipboardTimeout: parseInt(document.getElementById('clipboard-timeout').value, 10)
+    };
+    closeSettings();
+    startLockTimer();
+    showToast('Настройки сохранены');
+}
+
+function setupEnterHandlers() {
+    ['master-password', 'master-password-confirm'].forEach(id => {
+        document.getElementById(id).addEventListener('keydown', e => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (document.getElementById('btn-create-vault').style.display !== 'none') createNewVault();
+            }
+        });
+    });
+    document.getElementById('import-password-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); confirmImportPassword(); }
+    });
+    ['f-title', 'f-login', 'f-password', 'f-url'].forEach(id => {
+        document.getElementById(id).addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); saveEntry(); }
+        });
+    });
+    ['cp-current', 'cp-new', 'cp-new-confirm'].forEach(id => {
+        document.getElementById(id).addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); changeMasterPassword(); }
+        });
+    });
+    ['lock-timeout', 'clipboard-timeout'].forEach(id => {
+        document.getElementById(id).addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); saveSettings(); }
+        });
+    });
+}
+
+function bindEvents() {
+    document.getElementById('btn-open-file').addEventListener('click', openVaultFile);
+    document.getElementById('btn-new-vault').addEventListener('click', showNewVaultUI);
+    document.getElementById('btn-create-vault').addEventListener('click', createNewVault);
+    document.getElementById('fallback-open-input').addEventListener('change', handleFallbackOpenFile);
+
+    document.getElementById('btn-settings').addEventListener('click', openSettings);
+    document.getElementById('btn-export').addEventListener('click', exportEncrypted);
+    document.getElementById('btn-import').addEventListener('click', () => document.getElementById('import-file').click());
+    document.getElementById('import-file').addEventListener('change', importEncrypted);
+    document.getElementById('btn-health').addEventListener('click', openHealthReport);
+    document.getElementById('trash-btn').addEventListener('click', openTrash);
+    document.getElementById('btn-lock').addEventListener('click', lock);
+    document.getElementById('btn-add').addEventListener('click', () => openModal());
+    document.getElementById('search').addEventListener('input', renderEntries);
+    document.getElementById('btn-download-vault').addEventListener('click', downloadCurrentVault);
+
+    document.getElementById('btn-modal-cancel').addEventListener('click', closeModal);
+    document.getElementById('btn-modal-save').addEventListener('click', saveEntry);
+    document.getElementById('f-type').addEventListener('change', (e) => {
+        applyEntryTypeUI(e.target.value);
+        if (catFollowType) document.getElementById('f-category').value = defaultCategoryForType(e.target.value);
+    });
+    document.getElementById('btn-generate-password').addEventListener('click', generatePassword);
+    document.getElementById('btn-toggle-f-password').addEventListener('click', () => {
+        const inp = document.getElementById('f-password');
+        const btn = document.getElementById('btn-toggle-f-password');
+        if (inp.type === 'password') { inp.type = 'text'; btn.textContent = 'Скрыть'; }
+        else { inp.type = 'password'; btn.textContent = 'Показать'; }
+    });
+
+    document.getElementById('btn-settings-close').addEventListener('click', closeSettings);
+    document.getElementById('btn-settings-save').addEventListener('click', saveSettings);
+    document.getElementById('btn-change-password').addEventListener('click', openChangePassword);
+    document.getElementById('btn-cp-cancel').addEventListener('click', closeChangePassword);
+    document.getElementById('btn-cp-save').addEventListener('click', changeMasterPassword);
+    document.getElementById('btn-import-cancel').addEventListener('click', closeImportPasswordModal);
+    document.getElementById('btn-import-confirm').addEventListener('click', confirmImportPassword);
+    document.getElementById('empty-trash-btn').addEventListener('click', emptyTrash);
+    document.getElementById('btn-trash-close').addEventListener('click', closeTrash);
+    document.getElementById('hibp-btn').addEventListener('click', checkHIBP);
+    document.getElementById('btn-health-close').addEventListener('click', closeHealthReport);
+
+    document.getElementById('master-password').addEventListener('input', () => renderStrength('master-password', 'strength-fill', 'strength-text'));
+    document.getElementById('cp-new').addEventListener('input', () => renderStrength('cp-new', 'cp-strength-fill', 'cp-strength-text'));
+
+    ['modal', 'settings-modal', 'change-password-modal', 'import-password-modal', 'trash-modal', 'health-modal', 'details-modal', 'categories-modal', 'github-modal'].forEach(id => {
+        document.getElementById(id).addEventListener('click', e => {
+            if (e.target.id === id) {
+                if (id === 'modal') closeModal();
+                else if (id === 'settings-modal') closeSettings();
+                else if (id === 'change-password-modal') closeChangePassword();
+                else if (id === 'import-password-modal') closeImportPasswordModal();
+                else if (id === 'trash-modal') closeTrash();
+                else if (id === 'health-modal') closeHealthReport();
+                else if (id === 'details-modal') closeDetails();
+                else if (id === 'categories-modal') closeCategories();
+                else if (id === 'github-modal') closeGitHubModal();
+            }
+        });
+    });
+
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+            if (opBusy) return;
+            if (document.querySelector('.entry-menu.open')) { closeMenus(true); return; }
+            closeModal(); closeSettings(); closeChangePassword();
+            closeImportPasswordModal(); closeTrash(); closeHealthReport(); closeDetails(); closeCategories(); closeGitHubModal();
+        }
+    });
+
+    setupEnterHandlers();
+}
+
+window.addEventListener('beforeunload', (e) => {
+    if (vaultDirty) { e.preventDefault(); e.returnValue = ''; } // несохранённые изменения (режим без FSA)
+});
+
+if (!FSA_SUPPORTED) {
+    document.getElementById('login-hint').textContent =
+        'Ваш браузер не поддерживает File System Access API. Можно открыть хранилище через выбор файла и скачивать обновлённую копию после изменений. Рекомендуется Chrome или Edge.';
+}
+
+// Проверка доступности hashwasm
+if (typeof hashwasm === 'undefined' || typeof hashwasm.argon2id !== 'function') {
+    document.getElementById('login-hint').textContent = 'Ошибка: модуль Argon2id не загрузился. Обновите страницу.';
+    document.getElementById('btn-open-file').disabled = true;
+    document.getElementById('btn-new-vault').disabled = true;
+}
+
+bindEvents();
+resetLoginUI();
+if (window.matchMedia && window.matchMedia('(max-width: 640px)').matches) {
+    const warn = document.querySelector('details.warning');
+    if (warn) warn.open = false;
+}
+</script>
+</body>
+</html>
