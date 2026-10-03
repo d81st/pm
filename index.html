@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- CSP: инлайн-скрипт/стили, HIBP, wasm-unsafe-eval для Argon2 WASM из base64 -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'unsafe-inline'; connect-src https://api.pwnedpasswords.com https://api.github.com; img-src data:; form-action 'none'; base-uri 'none'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-4e3c9G3393pf+Q4ClpZt9VffyXrI+Ve2e3mFV7IFpfg=' 'sha256-xJzZZVWLFrxnnNxG9Hl1eTjW8KASSJf3JKpTlCrwlSk=' 'wasm-unsafe-eval'; style-src 'unsafe-inline'; connect-src https://api.pwnedpasswords.com https://api.github.com; img-src data:; form-action 'none'; base-uri 'none'">
+    <meta name="referrer" content="no-referrer">
     <title>Менеджер паролей</title>
     <style>
         :root {
@@ -376,6 +377,13 @@
         }
         .busy-overlay.active { display: flex; }
         .busy-overlay p { color: var(--text); font-size: 0.95rem; }
+        .saving-overlay { z-index: 250; background: rgba(15,23,42,0.6); cursor: progress; }
+        .saving-box {
+            display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 24px 30px;
+            background: var(--card); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+        }
+        #busy-overlay.active ~ #saving-overlay { display: none; } /* два индикатора одновременно не показываем */
+        .app-version { margin-top: 8px; opacity: 0.7; }
         .spinner {
             width: 40px; height: 40px; border: 3px solid var(--border);
             border-top-color: var(--accent); border-radius: 50%;
@@ -444,6 +452,7 @@
             <button type="button" class="btn-secondary btn-full" id="btn-create-vault" style="display:none;">Создать и сохранить</button>
         </div>
         <p id="gh-login-info" class="login-hint gh-login-info" hidden></p>
+        <p class="login-hint app-version">Версия 2026.10.03</p>
         <input type="file" id="fallback-open-input" accept=".json,application/json" style="display:none">
         <p id="login-hint" class="login-hint">Нужен Chrome или Edge для автосохранения. В Firefox/Safari — открытие через выбор файла и ручное скачивание после изменений.</p>
     </div>
@@ -758,6 +767,13 @@
     <p id="busy-text">Вычисление Argon2id…</p>
 </div>
 
+<div class="busy-overlay saving-overlay" id="saving-overlay" role="status" aria-live="polite">
+    <div class="saving-box">
+        <div class="spinner"></div>
+        <p>Сохранение в GitHub…</p>
+    </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <!-- hash-wasm Argon2 (UMD, WASM inlined as base64) ~30 KB -->
@@ -780,6 +796,12 @@
  * Обратная совместимость: v1/v2 (PBKDF2 600000) открываются без AAD,
  * при первом сохранении мигрируют на Argon2id.
  */
+
+// Страница не должна работать внутри чужого сайта (кликджекинг): meta-CSP не умеет frame-ancestors, поэтому проверяем сами
+if (window.top !== window.self) {
+    document.body.textContent = 'Эта страница не работает внутри других сайтов. Откройте её напрямую.';
+    throw new Error('framed');
+}
 
 const PBKDF2_ITERATIONS = 600000; // fallback для файлов v1/v2
 const MAX_PBKDF2_ITERATIONS = 10000000;
@@ -1043,15 +1065,37 @@ function validateCategoryName(raw, exceptId) {
     return '';
 }
 
+function newEntryId() {
+    return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
+
+const ENTRY_STRING_FIELDS = ['type', 'category', 'title', 'login', 'password', 'url', 'notes', 'created', 'passwordChangedAt', 'deletedAt'];
+
+/** Записи из файла: только объекты, текстовые поля — строго строки, id уникальны (защита от «битого» файла) */
+function cleanEntries(arr, seenIds) {
+    const out = [];
+    for (const raw of arr) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+        const e = { ...raw };
+        for (const f of ENTRY_STRING_FIELDS) {
+            if (e[f] === undefined) continue;
+            if (typeof e[f] === 'number' || typeof e[f] === 'boolean') e[f] = String(e[f]);
+            else if (typeof e[f] !== 'string') delete e[f];
+        }
+        if (typeof e.id !== 'string' || !e.id || seenIds.has(e.id)) e.id = newEntryId();
+        seenIds.add(e.id);
+        out.push(e);
+    }
+    return out;
+}
+
 function normalizeVaultData(decrypted) {
-    const clean = (arr) => arr
-        .filter(e => e && typeof e === 'object' && !Array.isArray(e))
-        .map(e => (typeof e.id === 'string' && e.id) ? e : { ...e, id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2) });
-    if (Array.isArray(decrypted)) return { entries: clean(decrypted), trash: [], categories: null, sync: null };
+    const seen = new Set();
+    if (Array.isArray(decrypted)) return { entries: cleanEntries(decrypted, seen), trash: [], categories: null, sync: null };
     if (decrypted && typeof decrypted === 'object') {
         return {
-            entries: Array.isArray(decrypted.entries) ? clean(decrypted.entries) : [],
-            trash: Array.isArray(decrypted.trash) ? clean(decrypted.trash) : [],
+            entries: Array.isArray(decrypted.entries) ? cleanEntries(decrypted.entries, seen) : [],
+            trash: Array.isArray(decrypted.trash) ? cleanEntries(decrypted.trash, seen) : [],
             categories: normalizeCategories(decrypted.categories),
             sync: normalizeSync(decrypted.sync)
         };
@@ -1128,6 +1172,10 @@ let lastFocusedBeforeModal = null;
 let fallbackMode = !FSA_SUPPORTED;
 let vaultDirty = false;
 let persistQueue = Promise.resolve();
+let pendingWrites = 0;              // незавершённые записи (включая начатые до блокировки) — предупреждение при закрытии вкладки
+let savingCount = 0;                // записи в GitHub текущей сессии: пока > 0, интерфейс закрыт индикатором
+let clipboardClearPending = false;  // буфер не удалось очистить (вкладка была в фоне) — повторим при возврате
+let NET_TIMEOUT_MS = 20000;         // предел ожидания ответа сети
 
 const DEFAULT_SETTINGS = { lockTimeout: 5, clipboardTimeout: 30 };
 let settings = { ...DEFAULT_SETTINGS };
@@ -1352,6 +1400,9 @@ const createNewVault = exclusive(async function createNewVault() {
     trash = [];
     categories = defaultCategories();
     vaultDirty = false;
+    ['master-password', 'master-password-confirm'].forEach(id => { document.getElementById(id).value = ''; });
+    document.getElementById('strength-fill').style.width = '0%';
+    document.getElementById('strength-text').textContent = '';
     showApp();
     showToast('Хранилище создано');
 });
@@ -1369,11 +1420,25 @@ function downloadJson(obj, filename) {
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 60000);
 }
 
-function wipeClipboard() {
-    if (!clipboardDirty) return; // чужое содержимое буфера не трогаем
-    clipboardDirty = false;
-    try { navigator.clipboard.writeText('').catch(() => {}); } catch (e) {}
+/** Очистить буфер, если его заполняла эта страница. В фоне браузер не даёт писать в буфер — тогда повторим при возврате */
+async function clearClipboardNow() {
+    if (!clipboardDirty) return false; // чужое содержимое буфера не трогаем
+    try {
+        await navigator.clipboard.writeText('');
+        clipboardDirty = false;
+        clipboardClearPending = false;
+        return true;
+    } catch (e) {
+        clipboardClearPending = true;
+        return false;
+    }
 }
+function wipeClipboard() { clearClipboardNow(); }
+function retryClipboardClear() {
+    if (clipboardClearPending && !document.hidden) clearClipboardNow().then(ok => { if (ok) showToast('Буфер очищен'); });
+}
+window.addEventListener('focus', retryClipboardClear);
+document.addEventListener('visibilitychange', retryClipboardClear);
 
 function lock() {
     lockEpoch++;
@@ -1387,6 +1452,8 @@ function lock() {
     vaultSync = null;
     lastSyncError = null;
     setSyncState('');
+    savingCount = 0;
+    document.getElementById('saving-overlay').classList.remove('active');
     masterKey = null;
     vaultSaltB64 = null;
     vaultArgon2 = { ...DEFAULT_ARGON2 };
@@ -1508,12 +1575,31 @@ function scheduleClipboardClear() {
     if (settings.clipboardTimeout <= 0) return;
     clipboardTimer = setTimeout(async () => {
         clipboardTimer = null;
-        try {
-            await navigator.clipboard.writeText('');
-            clipboardDirty = false;
-            showToast('Буфер очищен');
-        } catch (e) {}
+        if (await clearClipboardNow()) showToast('Буфер очищен');
     }, settings.clipboardTimeout * 1000);
+}
+
+function beginSaving() {
+    savingCount++;
+    document.getElementById('saving-overlay').classList.add('active');
+}
+function endSaving() {
+    savingCount = Math.max(0, savingCount - 1);
+    if (savingCount === 0) document.getElementById('saving-overlay').classList.remove('active');
+}
+// Пока идёт сохранение в GitHub, действия с клавиатуры и клики не проходят (индикатор перекрывает экран)
+['click', 'keydown', 'keyup', 'keypress'].forEach(type => {
+    window.addEventListener(type, (ev) => {
+        if (savingCount > 0) { ev.stopPropagation(); ev.preventDefault(); }
+    }, true);
+});
+
+/** fetch с пределом ожидания: «зависшая» сеть не должна замораживать страницу */
+async function fetchWithTimeout(url, opts) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), NET_TIMEOUT_MS);
+    try { return await fetch(url, { ...opts, signal: ctl.signal }); }
+    finally { clearTimeout(timer); }
 }
 
 /**
@@ -1531,9 +1617,14 @@ function persist() {
         handle: vaultFileHandle,
         gh: ghSession            // ссылка: sha обновляется по ходу очереди, переживает lock()
     };
+    const blocking = !!snap.gh;  // запись в GitHub идёт по сети — показываем индикатор и не даём нажимать
+    const epoch = lockEpoch;
+    pendingWrites++;
+    if (blocking) beginSaving();
     const job = persistQueue.then(() => doPersist(snap));
     persistQueue = job.catch(() => {}); // сбой одной записи не рвёт цепочку
-    return job.then(() => true, (e) => { console.error(e); return false; });
+    return job.then(() => true, (e) => { console.error(e); return false; })
+        .finally(() => { pendingWrites--; if (blocking && epoch === lockEpoch) endSaving(); });
 }
 
 async function doPersist(snap) {
@@ -1545,7 +1636,7 @@ async function doPersist(snap) {
     if (snap.gh) {
         if (sameSession()) setSyncState('saving');
         try {
-            snap.gh.sha = await ghPut(snap.gh, JSON.stringify(vaultObj, null, 2), snap.gh.sha);
+            await ghWrite(snap.gh, vaultObj);
         } catch (e) {
             lastSyncError = e;
             if (sameSession() && ghSession === snap.gh) {
@@ -2002,7 +2093,7 @@ async function ghFetch(sess, method, body) {
         headers: { 'Accept': 'application/vnd.github+json', 'Authorization': 'Bearer ' + sess.token }
     };
     if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
-    try { return await fetch(url, opts); } catch { throw ghError('NETWORK'); }
+    try { return await fetchWithTimeout(url, opts); } catch { throw ghError('NETWORK'); }
 }
 
 /** Скачать хранилище. null — файла ещё нет */
@@ -2028,7 +2119,7 @@ async function ghGet(sess) {
 async function ghCheckRepo(sess) {
     let res;
     try {
-        res = await fetch(`https://api.github.com/repos/${encodeURIComponent(sess.owner)}/${encodeURIComponent(sess.repo)}`, {
+        res = await fetchWithTimeout(`https://api.github.com/repos/${encodeURIComponent(sess.owner)}/${encodeURIComponent(sess.repo)}`, {
             cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer',
             headers: { 'Accept': 'application/vnd.github+json', 'Authorization': 'Bearer ' + sess.token }
         });
@@ -2052,6 +2143,36 @@ async function ghPut(sess, text, sha) {
     const j = await res.json();
     if (!j || !j.content || typeof j.content.sha !== 'string') throw ghError('HTTP', res.status);
     return j.content.sha;
+}
+
+/**
+ * Запись с восстановлением после обрыва: если прошлый запрос оборвался по таймауту, но GitHub успел его принять,
+ * следующий вернёт «конфликт». Тогда сверяем: если в GitHub лежит наша же версия — это не конфликт, продолжаем.
+ */
+async function ghWrite(gh, vaultObj) {
+    const text = JSON.stringify(vaultObj, null, 2);
+    const mark = { iv: vaultObj.iv, data: vaultObj.data };
+    const put = async () => {
+        try {
+            gh.sha = await ghPut(gh, text, gh.sha);
+            gh.unconfirmed = null;
+        } catch (e) {
+            if (e.code === 'NETWORK') {
+                gh.unconfirmed = (gh.unconfirmed || []).concat(mark).slice(-5);
+            }
+            throw e;
+        }
+    };
+    try { await put(); }
+    catch (e) {
+        if (e.code !== 'CONFLICT' || !gh.unconfirmed || !gh.unconfirmed.length) throw e;
+        const remote = await ghGet(gh);
+        const ours = !!remote && !!remote.json && gh.unconfirmed.some(m => m.iv === remote.json.iv && m.data === remote.json.data);
+        if (!ours) throw e;
+        gh.sha = remote.sha;
+        gh.unconfirmed = null;
+        await put();
+    }
 }
 
 /* ---------- статус синхронизации на странице ---------- */
@@ -2216,7 +2337,7 @@ const disconnectGitHub = exclusive(async function disconnectGitHub() {
 /** Хранилище открыто из файла, внутри есть настройки GitHub — включить синхронизацию на этом устройстве */
 const offerSyncFromVault = exclusive(async function offerSyncFromVault(sync, openedIv, openedData) {
     if (!masterKey || ghSession) return;
-    if (!confirm(`В хранилище сохранены настройки синхронизации с GitHub:\n${ghTargetLabel(sync)}\n\nВключить синхронизацию на этом устройстве?`)) return;
+    if (!confirm(`В хранилище сохранены настройки синхронизации с GitHub:\n${ghTargetLabel(sync)}\n\nВключить синхронизацию на этом устройстве?\n\nСоглашайтесь, только если это ваш репозиторий и файл хранилища ваш.`)) return;
     const sess = { ...sync, sha: null };
     const epoch = lockEpoch;
     showBusy('Подключение к GitHub…');
@@ -2790,6 +2911,10 @@ function openModal(id = null, presetCat = null) {
 function closeModal() {
     closeModalEl('modal');
     editId = null;
+    // секрет не должен оставаться в скрытом поле формы после закрытия
+    ['f-title', 'f-login', 'f-password', 'f-url', 'f-notes', 'f-newcat-name'].forEach(id => { document.getElementById(id).value = ''; });
+    document.getElementById('f-password').type = 'password';
+    document.getElementById('btn-toggle-f-password').textContent = 'Показать';
 }
 
 const saveEntry = exclusive(async function saveEntry() {
@@ -3058,7 +3183,7 @@ async function checkHIBP() {
             if (epoch !== lockEpoch) return; // хранилище заблокировано — прекращаем
             let text;
             try {
-                const res = await fetch('https://api.pwnedpasswords.com/range/' + prefix, {
+                const res = await fetchWithTimeout('https://api.pwnedpasswords.com/range/' + prefix, {
                     headers: { 'Add-Padding': 'true' }
                 });
                 if (!res.ok) { failedPrefixes++; continue; }
@@ -3151,6 +3276,7 @@ async function copyText(text) {
     try {
         await navigator.clipboard.writeText(text);
         clipboardDirty = true;
+        clipboardClearPending = false;
         showToast('Скопировано');
         scheduleClipboardClear();
     } catch {
@@ -3227,6 +3353,7 @@ function importEncrypted(event) {
 
 function closeImportPasswordModal() {
     closeModalEl('import-password-modal');
+    document.getElementById('import-password-input').value = ''; // мастер-пароль не остаётся в поле
     pendingImportPayload = null;
     importModalMode = 'import';
 }
@@ -3418,7 +3545,12 @@ function openChangePassword() {
     document.getElementById('cp-strength-text').textContent = '';
     openModalEl('change-password-modal', 'cp-current');
 }
-function closeChangePassword() { closeModalEl('change-password-modal'); }
+function closeChangePassword() {
+    closeModalEl('change-password-modal');
+    ['cp-current', 'cp-new', 'cp-new-confirm'].forEach(id => { document.getElementById(id).value = ''; });
+    document.getElementById('cp-strength-fill').style.width = '0%';
+    document.getElementById('cp-strength-text').textContent = '';
+}
 
 const changeMasterPassword = exclusive(async function changeMasterPassword() {
     const current = document.getElementById('cp-current').value;
@@ -3600,7 +3732,7 @@ function bindEvents() {
 }
 
 window.addEventListener('beforeunload', (e) => {
-    if (vaultDirty) { e.preventDefault(); e.returnValue = ''; } // несохранённые изменения (режим без FSA)
+    if (vaultDirty || pendingWrites > 0) { e.preventDefault(); e.returnValue = ''; } // несохранённые изменения или запись ещё идёт
 });
 
 if (!FSA_SUPPORTED) {
